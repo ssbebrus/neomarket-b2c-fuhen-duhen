@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from src.modules.catalog.router import router as catalog_router
 
 api_router = APIRouter()
-# TODO: Include B2C routers here (catalog, cart, orders)
+api_router.include_router(catalog_router, tags=["Catalog"])
