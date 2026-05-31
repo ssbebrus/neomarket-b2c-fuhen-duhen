@@ -248,7 +248,11 @@ async def test_product_card_returns_full_data_with_skus(client: AsyncClient):
             "id": CATEGORY_ID,
             "name": "Electronics",
             "level": 0,
-            "path": "Electronics"
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
         },
         "title": "iPhone 15 Pro Max",
         "slug": "iphone-15-pro-max",
@@ -300,33 +304,32 @@ async def test_product_card_returns_full_data_with_skus(client: AsyncClient):
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == PRODUCT_ID
-        assert data["seller_id"] == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-        assert data["category_id"] == CATEGORY_ID
+        assert data["seller"]["id"] == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        assert data["seller"]["display_name"] == "Apple Store"
         assert data["category"]["name"] == "Electronics"
-        assert data["title"] == "iPhone 15 Pro Max"
+        assert data["category"]["path"] == ["3fa85f64-5717-4562-b3fc-2c963f66afa6", CATEGORY_ID]
+        assert str(data["category"]["parent_id"]) == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        assert data["name"] == "iPhone 15 Pro Max"
         assert data["slug"] == "iphone-15-pro-max"
         assert data["description"] == "Флагманский смартфон"
-        assert data["status"] == "MODERATED"
         assert len(data["images"]) == 1
         assert data["images"][0]["url"] == "https://cdn.neomarket.ru/images/iphone15.jpg"
-        assert len(data["characteristics"]) == 1
-        assert data["characteristics"][0]["name"] == "Brand"
-        assert data["characteristics"][0]["value"] == "Apple"
+        assert data["attributes"] == {"Brand": "Apple"}
         
         assert data["has_stock"] is True
+        assert data["min_price"] == 12499000
+        assert data["old_price"] == 12999000
         
         assert len(data["skus"]) == 1
         sku = data["skus"][0]
         assert sku["id"] == "660e8400-e29b-41d4-a716-446655440001"
-        assert sku["product_id"] == PRODUCT_ID
         assert sku["name"] == "256GB Black"
-        assert sku["price"] == 12999000
-        assert sku["discount"] == 500000
-        assert sku["stock_quantity"] == 15
-        assert sku["active_quantity"] == 10
-        assert sku["article"] == "IP15PM-256-BLK"
+        assert sku["price"] == 12499000
+        assert sku["old_price"] == 12999000
+        assert sku["available_quantity"] == 10
+        assert sku["sku_code"] == "IP15PM-256-BLK"
         assert sku["images"] == []
-        assert sku["characteristics"] == []
+        assert sku["attributes"] == {}
         
         called_args, _ = mock_client.get.call_args
         assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}"
@@ -335,10 +338,26 @@ async def test_product_card_returns_full_data_with_skus(client: AsyncClient):
 async def test_product_card_returns_has_stock_false_if_no_active_quantity(client: AsyncClient):
     mock_b2b_response = {
         "id": PRODUCT_ID,
+        "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "category_id": CATEGORY_ID,
+        "category": {
+            "id": CATEGORY_ID,
+            "name": "Electronics",
+            "level": 0,
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
+        },
         "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "description": "Флагманский смартфон",
         "skus": [
             {
                 "id": "660e8400-e29b-41d4-a716-446655440001",
+                "product_id": PRODUCT_ID,
+                "name": "256GB Black",
                 "price": 12999000,
                 "active_quantity": 0
             }
@@ -362,15 +381,32 @@ async def test_product_card_returns_has_stock_false_if_no_active_quantity(client
         data = response.json()
         assert data["has_stock"] is False
 
+
 @pytest.mark.asyncio
 async def test_cost_price_absent_in_response(client: AsyncClient):
     # Simulate B2B returning cost_price and reserved_quantity
     mock_b2b_response = {
         "id": PRODUCT_ID,
+        "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "category_id": CATEGORY_ID,
+        "category": {
+            "id": CATEGORY_ID,
+            "name": "Electronics",
+            "level": 0,
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
+        },
         "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "description": "Флагманский смартфон",
         "skus": [
             {
                 "id": "660e8400-e29b-41d4-a716-446655440001",
+                "product_id": PRODUCT_ID,
+                "name": "256GB Black",
                 "price": 12999000,
                 "cost_price": 10000000,
                 "reserved_quantity": 2,
