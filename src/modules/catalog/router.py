@@ -14,6 +14,25 @@ async def get_catalog_products(
     offset: int = 0,
     q: str = None
 ):
+    if q is not None:
+        q_stripped = q.strip()
+        if len(q_stripped) < 3:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "INVALID_REQUEST", 
+                    "message": "Search query must be at least 3 characters"
+                }
+            )
+        if len(q_stripped) > 255:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "INVALID_REQUEST", 
+                    "message": "Search query must be at most 255 characters"
+                }
+            )
+
     if sort not in ALLOWED_SORTS:
         return JSONResponse(
             status_code=400,

@@ -148,3 +148,92 @@ async def test_category_filters_returns_expected_format(client: AsyncClient):
         # Verify translation
         called_args, _ = mock_client.get.call_args
         assert called_args[0] == f"/api/v1/public/categories/{CATEGORY_ID}/filters"
+
+@pytest.mark.asyncio
+async def test_search_returns_matching_products(client: AsyncClient):
+    mock_b2b_response = {
+        "items": [
+            {
+                "id": PRODUCT_ID,
+                "title": "Bluetooth Headphones",
+                "image": "url",
+                "price": 500000,
+                "in_stock": True,
+                "is_in_cart": False
+            }
+        ],
+        "total_count": 1,
+        "limit": 20,
+        "offset": 0
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/products?q=Headphones")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"][0]["title"] == "Bluetooth Headphones"
+        
+        called_args, called_kwargs = mock_client.get.call_args
+        params = called_kwargs.get("params")
+        assert ("search", "Headphones") in params
+
+@pytest.mark.asyncio
+async def test_short_query_returns_400(client: AsyncClient):
+    response = await client.get("/api/v1/catalog/products?q=ab")
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+    assert "at least 3 characters" in data["message"]
+
+@pytest.mark.asyncio
+async def test_special_chars_do_not_break_query(client: AsyncClient):
+    mock_b2b_response = {"items": [], "total_count": 0, "limit": 20, "offset": 0}
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/products?q=100%25_real")
+        
+        assert response.status_code == 200
+        called_args, called_kwargs = mock_client.get.call_args
+        params = called_kwargs.get("params")
+        assert ("search", "100%_real") in params
+
+@pytest.mark.asyncio
+async def test_empty_results_returns_200(client: AsyncClient):
+    mock_b2b_response = {"items": [], "total_count": 0, "limit": 20, "offset": 0}
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/products?q=NotExistingProduct")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
+        assert data["total_count"] == 0
