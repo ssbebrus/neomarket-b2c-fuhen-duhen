@@ -38,7 +38,7 @@ async def get_catalog_products(
             status_code=400,
             content={
                 "code": "INVALID_REQUEST", 
-                "message": "Invalid sort parameter. Allowed: rating, popularity, price_asc, price_desc, date_desc, discount_desc"
+                "message": "Invalid sort parameter. Allowed: price_asc, price_desc, popularity, new"
             }
         )
     
