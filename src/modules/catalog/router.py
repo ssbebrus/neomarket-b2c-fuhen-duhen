@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import UUID4
 
+from .schemas import CatalogProductDetail
 from .service import CatalogService, ALLOWED_SORTS
 
 router = APIRouter()
@@ -49,6 +50,10 @@ async def get_catalog_products(
         offset=offset,
         q=q
     )
+
+@router.get("/catalog/products/{product_id}", response_model=CatalogProductDetail)
+async def get_catalog_product(product_id: UUID4):
+    return await CatalogService.get_product(str(product_id))
 
 @router.get("/catalog/facets")
 async def get_catalog_facets(request: Request):

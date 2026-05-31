@@ -130,3 +130,112 @@ class CatalogService:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
                 raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+    @classmethod
+    def _map_product_to_b2c(cls, b2b_data: dict) -> dict:
+        skus = b2b_data.get("skus", [])
+        available_skus = [s for s in skus if s.get("active_quantity", 0) > 0]
+        
+        has_stock = len(available_skus) > 0
+        
+        if available_skus:
+            cheapest_sku = min(available_skus, key=lambda s: s.get("price", 0) - s.get("discount", 0))
+        else:
+            cheapest_sku = min(skus, key=lambda s: s.get("price", 0) - s.get("discount", 0)) if skus else None
+            
+        if cheapest_sku:
+            min_price = cheapest_sku.get("price", 0) - cheapest_sku.get("discount", 0)
+            old_price = cheapest_sku.get("price", 0) if cheapest_sku.get("discount", 0) > 0 else None
+        else:
+            min_price = 0
+            old_price = None
+
+        mapped_skus = []
+        for sku in skus:
+            sku_price = sku.get("price", 0)
+            sku_discount = sku.get("discount", 0)
+            mapped_sku = {
+                "id": sku.get("id"),
+                "name": sku.get("name"),
+                "sku_code": sku.get("article") or "",
+                "price": sku_price - sku_discount,
+                "old_price": sku_price if sku_discount > 0 else None,
+                "available_quantity": sku.get("active_quantity", 0),
+                "attributes": {c["name"]: c["value"] for c in sku.get("characteristics", [])},
+                "images": [
+                    {
+                        "id": img.get("id"),
+                        "url": img.get("url"),
+                        "ordering": img.get("ordering", 0),
+                        "alt": img.get("alt", ""),
+                        "is_main": img.get("ordering", 0) == 0
+                    } for img in sku.get("images", [])
+                ]
+            }
+            mapped_skus.append(mapped_sku)
+
+        b2b_category = b2b_data.get("category", {})
+        category_path_str = b2b_category.get("path", "")
+        category_path = category_path_str.split(".") if category_path_str else []
+        parent_id = category_path[-2] if len(category_path) > 1 else None
+
+        b2b_seller = b2b_data.get("seller")
+        if isinstance(b2b_seller, dict):
+            seller_mapped = {
+                "id": b2b_seller.get("id", b2b_data.get("seller_id")),
+                "display_name": b2b_seller.get("display_name", "Продавец")
+            }
+        else:
+            seller_mapped = {
+                "id": b2b_data.get("seller_id"),
+                "display_name": "Продавец"
+            }
+
+        mapped_product = {
+            "id": b2b_data.get("id"),
+            "name": b2b_data.get("title"),
+            "slug": b2b_data.get("slug"),
+            "category": {
+                "id": b2b_category.get("id"),
+                "name": b2b_category.get("name"),
+                "level": b2b_category.get("level", 0),
+                "path": category_path,
+                "parent_id": parent_id
+            },
+            "min_price": min_price,
+            "old_price": old_price,
+            "has_stock": has_stock,
+            "rating": None,
+            "reviews_count": 0,
+            "images": [
+                {
+                    "id": img.get("id"),
+                    "url": img.get("url"),
+                    "ordering": img.get("ordering", 0),
+                    "alt": img.get("alt", ""),
+                    "is_main": img.get("ordering", 0) == 0
+                } for img in b2b_data.get("images", [])
+            ],
+            "seller": seller_mapped,
+            "description": b2b_data.get("description"),
+            "attributes": {c["name"]: c["value"] for c in b2b_data.get("characteristics", [])},
+            "skus": mapped_skus
+        }
+        return mapped_product
+
+    @classmethod
+    async def get_product(cls, product_id: str) -> dict:
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get(f"/api/v1/public/products/{product_id}")
+                resp.raise_for_status()
+                data = resp.json()
+                
+                return cls._map_product_to_b2c(data)
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})

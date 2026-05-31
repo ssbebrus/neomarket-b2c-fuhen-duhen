@@ -237,3 +237,226 @@ async def test_empty_results_returns_200(client: AsyncClient):
         data = response.json()
         assert data["items"] == []
         assert data["total_count"] == 0
+
+@pytest.mark.asyncio
+async def test_product_card_returns_full_data_with_skus(client: AsyncClient):
+    mock_b2b_response = {
+        "id": PRODUCT_ID,
+        "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "category_id": CATEGORY_ID,
+        "category": {
+            "id": CATEGORY_ID,
+            "name": "Electronics",
+            "level": 0,
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
+        },
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "description": "Флагманский смартфон",
+        "status": "MODERATED",
+        "images": [
+            {
+                "url": "https://cdn.neomarket.ru/images/iphone15.jpg",
+                "ordering": 0,
+                "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            }
+        ],
+        "characteristics": [
+            {
+                "name": "Brand",
+                "value": "Apple",
+                "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            }
+        ],
+        "skus": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "product_id": PRODUCT_ID,
+                "name": "256GB Black",
+                "price": 12999000,
+                "discount": 500000,
+                "stock_quantity": 15,
+                "active_quantity": 10,
+                "article": "IP15PM-256-BLK",
+                "images": [],
+                "characteristics": []
+            }
+        ]
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == PRODUCT_ID
+        assert data["seller"]["id"] == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        assert data["seller"]["display_name"] == "Apple Store"
+        assert data["category"]["name"] == "Electronics"
+        assert data["category"]["path"] == ["3fa85f64-5717-4562-b3fc-2c963f66afa6", CATEGORY_ID]
+        assert str(data["category"]["parent_id"]) == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        assert data["name"] == "iPhone 15 Pro Max"
+        assert data["slug"] == "iphone-15-pro-max"
+        assert data["description"] == "Флагманский смартфон"
+        assert len(data["images"]) == 1
+        assert data["images"][0]["url"] == "https://cdn.neomarket.ru/images/iphone15.jpg"
+        assert data["attributes"] == {"Brand": "Apple"}
+        
+        assert data["has_stock"] is True
+        assert data["min_price"] == 12499000
+        assert data["old_price"] == 12999000
+        
+        assert len(data["skus"]) == 1
+        sku = data["skus"][0]
+        assert sku["id"] == "660e8400-e29b-41d4-a716-446655440001"
+        assert sku["name"] == "256GB Black"
+        assert sku["price"] == 12499000
+        assert sku["old_price"] == 12999000
+        assert sku["available_quantity"] == 10
+        assert sku["sku_code"] == "IP15PM-256-BLK"
+        assert sku["images"] == []
+        assert sku["attributes"] == {}
+        
+        called_args, _ = mock_client.get.call_args
+        assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}"
+
+@pytest.mark.asyncio
+async def test_product_card_returns_has_stock_false_if_no_active_quantity(client: AsyncClient):
+    mock_b2b_response = {
+        "id": PRODUCT_ID,
+        "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "category_id": CATEGORY_ID,
+        "category": {
+            "id": CATEGORY_ID,
+            "name": "Electronics",
+            "level": 0,
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
+        },
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "description": "Флагманский смартфон",
+        "skus": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "product_id": PRODUCT_ID,
+                "name": "256GB Black",
+                "price": 12999000,
+                "active_quantity": 0
+            }
+        ]
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["has_stock"] is False
+
+
+@pytest.mark.asyncio
+async def test_cost_price_absent_in_response(client: AsyncClient):
+    # Simulate B2B returning cost_price and reserved_quantity
+    mock_b2b_response = {
+        "id": PRODUCT_ID,
+        "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        "category_id": CATEGORY_ID,
+        "category": {
+            "id": CATEGORY_ID,
+            "name": "Electronics",
+            "level": 0,
+            "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+        },
+        "seller": {
+            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "display_name": "Apple Store"
+        },
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "description": "Флагманский смартфон",
+        "skus": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "product_id": PRODUCT_ID,
+                "name": "256GB Black",
+                "price": 12999000,
+                "cost_price": 10000000,
+                "reserved_quantity": 2,
+                "active_quantity": 10
+            }
+        ]
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Explicit test for requirement: assert 'cost_price' not in response.json()['skus'][0]
+        assert "cost_price" not in data["skus"][0]
+        assert "reserved_quantity" not in data["skus"][0]
+        assert data["skus"][0]["price"] == 12999000
+
+@pytest.mark.asyncio
+async def test_blocked_product_returns_404(client: AsyncClient):
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        # Simulate B2B returning 404 for a blocked/deleted product
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"code": "NOT_FOUND", "message": "Product not found"}
+        
+        mock_client.get.side_effect = HTTPStatusError(
+            "404 Not Found",
+            request=Request("GET", f"/api/v1/public/products/{PRODUCT_ID}"),
+            response=mock_response
+        )
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 404
+        data = response.json()
+        assert data["code"] == "NOT_FOUND"
+
