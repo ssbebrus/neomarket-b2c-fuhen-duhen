@@ -93,7 +93,7 @@ async def test_invalid_sort_returns_400(client: AsyncClient):
     data = response.json()
     assert data["code"] == "INVALID_REQUEST"
     assert "Invalid sort parameter" in data["message"]
-    assert "rating, popularity, price_asc, price_desc, date_desc, discount_desc" in data["message"]
+    assert "price_asc, price_desc, popularity, new" in data["message"]
 
 @pytest.mark.asyncio
 async def test_b2b_unavailable_returns_502(client: AsyncClient):

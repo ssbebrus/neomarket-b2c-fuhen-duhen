@@ -3,15 +3,7 @@ import re
 from fastapi import Request, HTTPException
 from src.config import settings
 
-ALLOWED_SORTS = {"rating", "popularity", "price_asc", "price_desc", "date_desc", "discount_desc"}
-SORT_MAP = {
-    "rating": "popular",
-    "popularity": "popular",
-    "price_asc": "price_asc",
-    "price_desc": "price_desc",
-    "date_desc": "created_desc",
-    "discount_desc": "popular" # Fallback
-}
+ALLOWED_SORTS = {"price_asc", "price_desc", "popularity", "new"}
 
 class CatalogService:
     @staticmethod
@@ -79,7 +71,7 @@ class CatalogService:
         if q:
             b2b_params.append(("search", q))
             
-        b2b_params.append(("sort", SORT_MAP[sort]))
+        b2b_params.append(("sort", sort))
         b2b_params.append(("limit", str(limit)))
         b2b_params.append(("offset", str(offset)))
 
