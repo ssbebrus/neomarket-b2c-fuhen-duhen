@@ -237,3 +237,104 @@ async def test_empty_results_returns_200(client: AsyncClient):
         data = response.json()
         assert data["items"] == []
         assert data["total_count"] == 0
+
+@pytest.mark.asyncio
+async def test_product_card_returns_full_data_with_skus(client: AsyncClient):
+    mock_b2b_response = {
+        "id": PRODUCT_ID,
+        "title": "iPhone 15 Pro Max",
+        "description": "Флагманский смартфон",
+        "skus": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "price": 12999000,
+                "active_quantity": 10
+            }
+        ]
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == PRODUCT_ID
+        assert data["title"] == "iPhone 15 Pro Max"
+        assert len(data["skus"]) == 1
+        assert data["skus"][0]["price"] == 12999000
+        
+        called_args, _ = mock_client.get.call_args
+        assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}"
+
+@pytest.mark.asyncio
+async def test_cost_price_absent_in_response(client: AsyncClient):
+    # Simulate B2B returning cost_price and reserved_quantity
+    mock_b2b_response = {
+        "id": PRODUCT_ID,
+        "title": "iPhone 15 Pro Max",
+        "skus": [
+            {
+                "id": "660e8400-e29b-41d4-a716-446655440001",
+                "price": 12999000,
+                "cost_price": 10000000,
+                "reserved_quantity": 2,
+                "active_quantity": 10
+            }
+        ]
+    }
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Explicit test for requirement: assert 'cost_price' not in response.json()['skus'][0]
+        assert "cost_price" not in data["skus"][0]
+        assert "reserved_quantity" not in data["skus"][0]
+        assert data["skus"][0]["price"] == 12999000
+
+@pytest.mark.asyncio
+async def test_blocked_product_returns_404(client: AsyncClient):
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        # Simulate B2B returning 404 for a blocked/deleted product
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"code": "NOT_FOUND", "message": "Product not found"}
+        
+        mock_client.get.side_effect = HTTPStatusError(
+            "404 Not Found",
+            request=Request("GET", f"/api/v1/public/products/{PRODUCT_ID}"),
+            response=mock_response
+        )
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}")
+        
+        assert response.status_code == 404
+        data = response.json()
+        assert data["code"] == "NOT_FOUND"
+

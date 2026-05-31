@@ -50,6 +50,10 @@ async def get_catalog_products(
         q=q
     )
 
+@router.get("/catalog/products/{product_id}")
+async def get_catalog_product(product_id: UUID4):
+    return await CatalogService.get_product(str(product_id))
+
 @router.get("/catalog/facets")
 async def get_catalog_facets(request: Request):
     return await CatalogService.get_facets(request)
