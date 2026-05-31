@@ -140,12 +140,18 @@ class CatalogService:
                 data = resp.json()
                 
                 # Defense in depth: strictly remove sensitive fields from SKUs
+                # And calculate has_stock based on active_quantity
+                has_stock = False
                 if "skus" in data:
                     for sku in data["skus"]:
                         sku.pop("cost_price", None)
                         sku.pop("reserved_quantity", None)
-                        
+                        if sku.get("active_quantity", 0) > 0:
+                            has_stock = True
+                
+                data["has_stock"] = has_stock
                 return data
+
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
                     raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
