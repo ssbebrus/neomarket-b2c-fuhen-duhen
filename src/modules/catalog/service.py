@@ -1,5 +1,6 @@
 import httpx
 import re
+from typing import Optional
 from fastapi import Request, HTTPException
 from src.config import settings
 
@@ -256,3 +257,293 @@ class CatalogService:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
                 raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+    @staticmethod
+    def slugify(text: str) -> str:
+        # Russian transliteration dictionary
+        translit_dict = {
+            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+            'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+            'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+            'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
+            'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+        }
+        text = text.lower().strip()
+        result = []
+        for char in text:
+            if char in translit_dict:
+                result.append(translit_dict[char])
+            elif char.isalnum():
+                result.append(char)
+            elif char in (' ', '-', '_'):
+                result.append('-')
+            else:
+                result.append('-')
+        slug = ''.join(result)
+        slug = re.sub(r'-+', '-', slug)
+        return slug.strip('-')
+
+    @staticmethod
+    def check_orphan_node(category_id: str, all_categories_by_id: dict) -> None:
+        """
+        Check if category_id or any of its ancestors in its path is missing from all_categories_by_id.
+        """
+        cat = all_categories_by_id.get(category_id)
+        if not cat:
+            return
+        path_str = cat.get("path", "")
+        if not path_str:
+            return
+        path_parts = path_str.split(".")
+        for part in path_parts:
+            if part not in all_categories_by_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "orphan_node", "message": "category hierarchy is broken"}
+                )
+
+    @classmethod
+    async def get_categories(cls) -> list:
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get("/api/v1/categories")
+                resp.raise_for_status()
+                b2b_cats = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+        mapped = []
+        for cat in b2b_cats:
+            path_str = cat.get("path", "")
+            path_parts = path_str.split(".") if path_str else []
+            parent_id = path_parts[-2] if len(path_parts) > 1 else None
+            mapped.append({
+                "id": cat.get("id"),
+                "name": cat.get("name"),
+                "level": cat.get("level", 0),
+                "path": path_parts,
+                "parent_id": parent_id
+            })
+        return mapped
+
+    @classmethod
+    async def get_categories_tree(cls) -> list:
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get("/api/v1/categories")
+                resp.raise_for_status()
+                b2b_cats = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+        # Build ID lookup and verify orphan nodes
+        all_cats_by_id = {c["id"]: c for c in b2b_cats}
+        for cat_id, cat in all_cats_by_id.items():
+            path_str = cat.get("path", "")
+            if path_str:
+                path_parts = path_str.split(".")
+                for part in path_parts:
+                    if part not in all_cats_by_id:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"error": "orphan_node", "message": "category hierarchy is broken"}
+                        )
+
+        # Build nodes
+        nodes = {}
+        for cat in b2b_cats:
+            path_str = cat.get("path", "")
+            path_parts = path_str.split(".") if path_str else []
+            parent_id = path_parts[-2] if len(path_parts) > 1 else None
+            nodes[cat["id"]] = {
+                "id": cat["id"],
+                "name": cat["name"],
+                "level": cat["level"],
+                "path": path_parts,
+                "parent_id": parent_id,
+                "children": []
+            }
+
+        roots = []
+        for cat_id, node in nodes.items():
+            parent_id = node["parent_id"]
+            if parent_id and parent_id in nodes:
+                nodes[parent_id]["children"].append(node)
+            else:
+                roots.append(node)
+        return roots
+
+    @classmethod
+    async def get_category_detail(cls, category_id: str, include_product_count: bool = False) -> dict:
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get("/api/v1/categories")
+                resp.raise_for_status()
+                b2b_cats = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+        all_cats_by_id = {c["id"]: c for c in b2b_cats}
+        if category_id not in all_cats_by_id:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "NOT_FOUND", "message": "Category not found"}
+            )
+
+        # Orphan check
+        cls.check_orphan_node(category_id, all_cats_by_id)
+
+        cat = all_cats_by_id[category_id]
+        path_str = cat.get("path", "")
+        path_parts = path_str.split(".") if path_str else []
+        parent_id = path_parts[-2] if len(path_parts) > 1 else None
+
+        parent_node = None
+        if parent_id and parent_id in all_cats_by_id:
+            p_cat = all_cats_by_id[parent_id]
+            parent_node = {
+                "id": p_cat["id"],
+                "name": p_cat["name"],
+                "slug": cls.slugify(p_cat["name"])
+            }
+
+        slug = cls.slugify(cat["name"])
+
+        # Fetch product count
+        product_count = 0
+        if include_product_count:
+            async with await cls.get_b2b_client() as client:
+                try:
+                    p_resp = await client.get("/api/v1/public/products", params={"category_id": category_id, "limit": 1})
+                    p_resp.raise_for_status()
+                    product_count = p_resp.json().get("total_count", 0)
+                except Exception:
+                    product_count = 0
+
+        created_at = cat.get("created_at") or "2024-01-15T10:30:00Z"
+        updated_at = cat.get("updated_at") or "2024-03-01T14:20:00Z"
+
+        return {
+            "id": cat["id"],
+            "name": cat["name"],
+            "slug": slug,
+            "description": f"Описание категории {cat['name']}",
+            "parent": parent_node,
+            "product_count": product_count,
+            "seo": {
+                "title": f"Купить {cat['name'].lower()} в интернет-магазине | NeoMarket",
+                "description": f"{cat['name']} по выгодным ценам. Бесплатная доставка.",
+                "keywords": [cat['name'].lower(), f"купить {cat['name'].lower()}"]
+            },
+            "meta_tags": {
+                "og_title": f"{cat['name']} | NeoMarket",
+                "og_description": f"Купить {cat['name'].lower()} в интернет-магазине."
+            },
+            "image_url": f"https://cdn.neomarket.ru/categories/{slug}.jpg",
+            "is_active": cat.get("is_active", True),
+            "created_at": created_at,
+            "updated_at": updated_at
+        }
+
+    @classmethod
+    async def get_breadcrumbs(cls, category_id: Optional[str] = None, product_id: Optional[str] = None) -> dict:
+        if category_id is not None and product_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "ambiguous_param", "message": "only one of category_id or product_id must be provided"}
+            )
+        if category_id is None and product_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "missing_param", "message": "category_id or product_id must be provided"}
+            )
+
+        resolved_category_id = category_id
+        resolved_via = "category_id"
+
+        if product_id is not None:
+            resolved_via = "product_id"
+            async with await cls.get_b2b_client() as client:
+                try:
+                    p_resp = await client.get(f"/api/v1/public/products/{product_id}")
+                    if p_resp.status_code == 404:
+                        raise HTTPException(
+                            status_code=404,
+                            detail={"code": "NOT_FOUND", "message": "Product not found"}
+                        )
+                    p_resp.raise_for_status()
+                    product_data = p_resp.json()
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+                    raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                except httpx.RequestError:
+                    raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+            category_obj = product_data.get("category")
+            if not category_obj or "id" not in category_obj:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "NOT_FOUND", "message": "Category not found"}
+                )
+            resolved_category_id = category_obj["id"]
+
+        # Fetch all categories
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get("/api/v1/categories")
+                resp.raise_for_status()
+                b2b_cats = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+        all_cats_by_id = {c["id"]: c for c in b2b_cats}
+        if resolved_category_id not in all_cats_by_id:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "NOT_FOUND", "message": "Category not found"}
+            )
+
+        # Check orphan node
+        cls.check_orphan_node(resolved_category_id, all_cats_by_id)
+
+        target_cat = all_cats_by_id[resolved_category_id]
+        path_str = target_cat.get("path", "")
+        path_parts = path_str.split(".") if path_str else []
+
+        breadcrumbs_data = []
+        cumulative_url = "/catalog"
+        for i, path_part_id in enumerate(path_parts):
+            if path_part_id not in all_cats_by_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "orphan_node", "message": "category hierarchy is broken"}
+                )
+            cat_item = all_cats_by_id[path_part_id]
+            slug = cls.slugify(cat_item["name"])
+            cumulative_url = f"{cumulative_url}/{slug}"
+            breadcrumbs_data.append({
+                "id": cat_item["id"],
+                "slug": slug,
+                "name": cat_item["name"],
+                "url": cumulative_url,
+                "level": i,
+                "is_current": (path_part_id == resolved_category_id)
+            })
+
+        return {
+            "data": breadcrumbs_data,
+            "meta": {
+                "resolved_via": resolved_via,
+                "category_id": resolved_category_id
+            }
+        }
+

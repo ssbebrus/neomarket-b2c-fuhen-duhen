@@ -571,3 +571,244 @@ async def test_similar_returns_up_to_10_from_same_category(client: AsyncClient):
         assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}/similar"
         assert called_kwargs.get("params") == {"limit": 10}
 
+
+@pytest.mark.asyncio
+async def test_category_tree_returns_nested_structure(client: AsyncClient):
+    mock_b2b_categories = [
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174002",
+            "name": "Электроника",
+            "path": "123e4567-e89b-42d3-a456-426614174002",
+            "level": 0,
+            "is_active": True,
+            "created_at": "2024-01-15T10:30:00Z",
+            "updated_at": "2024-03-01T14:20:00Z"
+        },
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174003",
+            "name": "Смартфоны",
+            "path": "123e4567-e89b-42d3-a456-426614174002.123e4567-e89b-42d3-a456-426614174003",
+            "level": 1,
+            "is_active": True,
+            "created_at": "2024-01-15T10:30:00Z",
+            "updated_at": "2024-03-01T14:20:00Z"
+        },
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174004",
+            "name": "Android",
+            "path": "123e4567-e89b-42d3-a456-426614174002.123e4567-e89b-42d3-a456-426614174003.123e4567-e89b-42d3-a456-426614174004",
+            "level": 2,
+            "is_active": True,
+            "created_at": "2024-01-15T10:30:00Z",
+            "updated_at": "2024-03-01T14:20:00Z"
+        }
+    ]
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_categories
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/categories/tree")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "Электроника"
+        assert len(data[0]["children"]) == 1
+        assert data[0]["children"][0]["name"] == "Смартфоны"
+        assert len(data[0]["children"][0]["children"]) == 1
+        assert data[0]["children"][0]["children"][0]["name"] == "Android"
+
+
+@pytest.mark.asyncio
+async def test_category_details_success(client: AsyncClient):
+    mock_b2b_categories = [
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174002",
+            "name": "Электроника",
+            "path": "123e4567-e89b-42d3-a456-426614174002",
+            "level": 0,
+            "is_active": True
+        },
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174003",
+            "name": "Смартфоны",
+            "path": "123e4567-e89b-42d3-a456-426614174002.123e4567-e89b-42d3-a456-426614174003",
+            "level": 1,
+            "is_active": True
+        }
+    ]
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_categories
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/categories/123e4567-e89b-42d3-a456-426614174003")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "123e4567-e89b-42d3-a456-426614174003"
+        assert data["name"] == "Смартфоны"
+        assert data["slug"] == "smartfony"
+        assert data["parent"]["id"] == "123e4567-e89b-42d3-a456-426614174002"
+        assert data["parent"]["name"] == "Электроника"
+        assert data["parent"]["slug"] == "elektronika"
+        assert "seo" in data
+        assert data["seo"]["title"] == "Купить смартфоны в интернет-магазине | NeoMarket"
+
+
+@pytest.mark.asyncio
+async def test_breadcrumbs_return_path_from_root(client: AsyncClient):
+    mock_b2b_categories = [
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174002",
+            "name": "Электроника",
+            "path": "123e4567-e89b-42d3-a456-426614174002",
+            "level": 0,
+            "is_active": True
+        },
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174003",
+            "name": "Смартфоны",
+            "path": "123e4567-e89b-42d3-a456-426614174002.123e4567-e89b-42d3-a456-426614174003",
+            "level": 1,
+            "is_active": True
+        }
+    ]
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_categories
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        # Test resolution via category_id
+        response = await client.get("/api/v1/catalog/breadcrumbs?category_id=123e4567-e89b-42d3-a456-426614174003")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == 2
+        assert data["data"][0]["name"] == "Электроника"
+        assert data["data"][0]["url"] == "/catalog/elektronika"
+        assert data["data"][1]["name"] == "Смартфоны"
+        assert data["data"][1]["url"] == "/catalog/elektronika/smartfony"
+        assert data["data"][1]["is_current"] is True
+        assert data["meta"]["resolved_via"] == "category_id"
+
+        # Test resolution via product_id
+        mock_product_response = {
+            "id": "770e8400-e29b-41d4-a716-446655440002",
+            "category": {
+                "id": "123e4567-e89b-42d3-a456-426614174003",
+                "name": "Смартфоны"
+            }
+        }
+        
+        async def mock_get(url, params=None, **kwargs):
+            res = AsyncMock(spec=Response)
+            res.status_code = 200
+            res.raise_for_status.return_value = None
+            if "products/770e8400-e29b-41d4-a716-446655440002" in url:
+                res.json.return_value = mock_product_response
+            else:
+                res.json.return_value = mock_b2b_categories
+            return res
+            
+        mock_client.get.side_effect = mock_get
+        
+        response2 = await client.get("/api/v1/catalog/breadcrumbs?product_id=770e8400-e29b-41d4-a716-446655440002")
+        assert response2.status_code == 200
+        data2 = response2.json()
+        assert len(data2["data"]) == 2
+        assert data2["data"][1]["name"] == "Смартфоны"
+        assert data2["meta"]["resolved_via"] == "product_id"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_params_returns_400(client: AsyncClient):
+    # Both provided
+    response = await client.get("/api/v1/catalog/breadcrumbs?category_id=123e4567-e89b-42d3-a456-426614174003&product_id=770e8400-e29b-41d4-a716-446655440002")
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "ambiguous_param"
+    
+    # None provided
+    response2 = await client.get("/api/v1/catalog/breadcrumbs")
+    assert response2.status_code == 400
+    data2 = response2.json()
+    assert data2["error"] == "missing_param"
+
+
+@pytest.mark.asyncio
+async def test_orphan_node_returns_422(client: AsyncClient):
+    # Missing parent category: "123e4567-e89b-42d3-a456-426614174002" is missing from list
+    mock_b2b_categories = [
+        {
+            "id": "123e4567-e89b-42d3-a456-426614174003",
+            "name": "Смартфоны",
+            "path": "123e4567-e89b-42d3-a456-426614174002.123e4567-e89b-42d3-a456-426614174003",
+            "level": 1,
+            "is_active": True
+        }
+    ]
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_categories
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        # Tree returns 422
+        response_tree = await client.get("/api/v1/catalog/categories/tree")
+        assert response_tree.status_code == 422
+        assert response_tree.json()["error"] == "orphan_node"
+
+        # Details returns 422
+        response_detail = await client.get("/api/v1/catalog/categories/123e4567-e89b-42d3-a456-426614174003")
+        assert response_detail.status_code == 422
+        assert response_detail.json()["error"] == "orphan_node"
+
+        # Breadcrumbs returns 422
+        response_crumbs = await client.get("/api/v1/catalog/breadcrumbs?category_id=123e4567-e89b-42d3-a456-426614174003")
+        assert response_crumbs.status_code == 422
+        assert response_crumbs.json()["error"] == "orphan_node"
+
+
+@pytest.mark.asyncio
+async def test_unknown_category_returns_404(client: AsyncClient):
+    mock_b2b_categories = []
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_categories
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get("/api/v1/catalog/categories/123e4567-e89b-42d3-a456-426614174009")
+        assert response.status_code == 404
+        assert response.json()["code"] == "NOT_FOUND"
+
+
