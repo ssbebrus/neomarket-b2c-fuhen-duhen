@@ -60,7 +60,7 @@ async def get_catalog_product_similar(product_id: UUID4, limit: int = 10):
     return await CatalogService.get_similar_products(str(product_id), limit)
 
 @router.get("/catalog/facets")
-async def get_catalog_facets(request: Request):
+async def get_catalog_facets(category_id: UUID4, request: Request):
     return await CatalogService.get_facets(request)
 
 @router.get("/catalog/categories/{category_id}/filters")
