@@ -239,3 +239,20 @@ class CatalogService:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
                 raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+    @classmethod
+    async def get_similar_products(cls, product_id: str, limit: int) -> list:
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.get(f"/api/v1/public/products/{product_id}/similar", params={"limit": limit})
+                resp.raise_for_status()
+                data = resp.json()
+                
+                return [cls._map_product_to_b2c(p) for p in data]
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
