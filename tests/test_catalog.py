@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient, RequestError, HTTPStatusError, Request, Response
 from unittest.mock import patch, AsyncMock
+import uuid
 
 CATEGORY_ID = "123e4567-e89b-42d3-a456-426614174001"
 PRODUCT_ID = "770e8400-e29b-41d4-a716-446655440002"
@@ -459,4 +460,114 @@ async def test_blocked_product_returns_404(client: AsyncClient):
         assert response.status_code == 404
         data = response.json()
         assert data["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_empty_category_returns_200_empty_list(client: AsyncClient):
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = []
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}/similar?limit=10")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data == []
+
+@pytest.mark.asyncio
+async def test_unknown_product_returns_404(client: AsyncClient):
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"code": "NOT_FOUND", "message": "Product not found"}
+        
+        mock_client.get.side_effect = HTTPStatusError(
+            "404 Not Found",
+            request=Request("GET", f"/api/v1/public/products/{PRODUCT_ID}/similar"),
+            response=mock_response
+        )
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}/similar")
+        
+        assert response.status_code == 404
+        data = response.json()
+        assert data["code"] == "NOT_FOUND"
+
+@pytest.mark.asyncio
+async def test_similar_returns_up_to_10_from_same_category(client: AsyncClient):
+    import uuid
+    mock_b2b_products = []
+    for i in range(12):
+        pid = str(uuid.uuid4())
+        mock_b2b_products.append({
+            "id": pid,
+            "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "category_id": CATEGORY_ID,
+            "category": {
+                "id": CATEGORY_ID,
+                "name": "Electronics",
+                "level": 0,
+                "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+            },
+            "title": f"Similar Product {i}",
+            "slug": f"similar-product-{i}",
+            "description": "...",
+            "status": "MODERATED",
+            "images": [{"url": "url", "ordering": 0, "id": str(uuid.uuid4())}],
+            "characteristics": [],
+            "skus": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "product_id": pid,
+                    "name": "SKU",
+                    "price": 1000,
+                    "discount": 0,
+                    "stock_quantity": 10,
+                    "active_quantity": 10,
+                    "article": f"SKU-{i}",
+                    "images": [],
+                    "characteristics": []
+                }
+            ]
+        })
+    
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        async def mock_b2b_get(url, params=None, **kwargs):
+            limit = int(params.get("limit", 10)) if params else 10
+            from httpx import Response
+            response = AsyncMock(spec=Response)
+            response.status_code = 200
+            response.json.return_value = mock_b2b_products[:limit]
+            response.raise_for_status.return_value = None
+            return response
+
+        mock_client.get.side_effect = mock_b2b_get
+
+        response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}/similar?limit=10")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 10
+        assert data[0]["name"] == "Similar Product 0"
+        assert PRODUCT_ID not in [p["id"] for p in data]
+        
+        called_args, called_kwargs = mock_client.get.call_args
+        assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}/similar"
+        assert called_kwargs.get("params") == {"limit": 10}
 
