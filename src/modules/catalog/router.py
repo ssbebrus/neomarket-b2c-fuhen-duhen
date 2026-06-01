@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import UUID4
 
-from .schemas import CatalogProductDetail, CatalogProductCard
+from .schemas import CatalogProductDetail, CatalogProductCard, CategoryRef, CategoryTreeNode, CategoryDetail, BreadcrumbsResponse
 from .service import CatalogService, ALLOWED_SORTS
 
 router = APIRouter()
@@ -66,3 +66,26 @@ async def get_catalog_facets(category_id: UUID4, request: Request):
 @router.get("/catalog/categories/{category_id}/filters")
 async def get_catalog_category_filters(category_id: UUID4):
     return await CatalogService.get_category_filters(str(category_id))
+
+@router.get("/catalog/categories", response_model=list[CategoryRef])
+async def get_catalog_categories():
+    return await CatalogService.get_categories()
+
+@router.get("/catalog/categories/tree", response_model=list[CategoryTreeNode])
+async def get_catalog_categories_tree():
+    return await CatalogService.get_categories_tree()
+
+@router.get("/catalog/categories/{category_id}", response_model=CategoryDetail)
+async def get_catalog_category_detail(category_id: UUID4, include_product_count: bool = False):
+    return await CatalogService.get_category_detail(str(category_id), include_product_count)
+
+@router.get("/catalog/breadcrumbs", response_model=BreadcrumbsResponse)
+async def get_catalog_breadcrumbs(
+    category_id: UUID4 = None,
+    product_id: UUID4 = None
+):
+    return await CatalogService.get_breadcrumbs(
+        category_id=str(category_id) if category_id else None,
+        product_id=str(product_id) if product_id else None
+    )
+

@@ -50,3 +50,51 @@ class CatalogProductDetail(CatalogProductCard):
     description: str
     attributes: Dict[str, Any]
     skus: List[CatalogSku]
+
+class CategoryTreeNode(CategoryRef):
+    children: List["CategoryTreeNode"] = []
+
+class CategoryParentRef(BaseModel):
+    id: UUID4
+    name: str
+    slug: str
+
+class CategorySeo(BaseModel):
+    title: str
+    description: str
+    keywords: List[str]
+
+class CategoryMetaTags(BaseModel):
+    og_title: str
+    og_description: str
+
+class CategoryDetail(BaseModel):
+    id: UUID4
+    name: str
+    slug: str
+    description: str
+    parent: Optional[CategoryParentRef] = None
+    product_count: int
+    seo: CategorySeo
+    meta_tags: CategoryMetaTags
+    image_url: str
+    is_active: bool
+    created_at: str
+    updated_at: str
+
+class BreadcrumbItem(BaseModel):
+    id: UUID4
+    slug: str
+    name: str
+    url: str
+    level: int
+    is_current: bool
+
+class BreadcrumbsMeta(BaseModel):
+    resolved_via: str
+    category_id: UUID4
+
+class BreadcrumbsResponse(BaseModel):
+    data: List[BreadcrumbItem]
+    meta: BreadcrumbsMeta
+
