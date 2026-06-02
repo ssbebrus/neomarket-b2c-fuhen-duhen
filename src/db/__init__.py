@@ -1,6 +1,5 @@
 from src.db.base import Base
+from src.modules.favorites.models import Favorite
 
 # Импортируем все модели сюда, чтобы метаданные Base загрузились для Alembic
-# TODO: Import B2C models here
-
 # Иначе alembic --autogenerate не сможет найти таблицы
