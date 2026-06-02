@@ -18,6 +18,9 @@ def event_loop():
 
 @pytest.fixture(scope="session")
 async def test_engine():
+    from src.db.base import Base
+    async with real_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield real_engine
     await real_engine.dispose()
 
