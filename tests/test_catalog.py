@@ -14,10 +14,12 @@ async def test_catalog_returns_filtered_sorted_products(client: AsyncClient):
             {
                 "id": PRODUCT_ID,
                 "title": "iPhone 15 Pro Max",
-                "image": "https://cdn.neomarket.ru/images/iphone15.jpg",
-                "price": 12999000,
-                "in_stock": True,
-                "is_in_cart": False
+                "cover_image": "https://cdn.neomarket.ru/images/iphone15.jpg",
+                "min_price": 12999000,
+                "status": "MODERATED",
+                "category_id": CATEGORY_ID,
+                "slug": "iphone-15-pro-max",
+                "created_at": "2026-06-03T11:16:15.057Z"
             }
         ],
         "total_count": 1,
@@ -41,7 +43,7 @@ async def test_catalog_returns_filtered_sorted_products(client: AsyncClient):
         
         assert response.status_code == 200
         data = response.json()
-        assert data["items"][0]["title"] == "iPhone 15 Pro Max"
+        assert data["items"][0]["name"] == "iPhone 15 Pro Max"
         
         # Verify translation
         called_args, called_kwargs = mock_client.get.call_args
@@ -157,10 +159,12 @@ async def test_search_returns_matching_products(client: AsyncClient):
             {
                 "id": PRODUCT_ID,
                 "title": "Bluetooth Headphones",
-                "image": "url",
-                "price": 500000,
-                "in_stock": True,
-                "is_in_cart": False
+                "cover_image": "url",
+                "min_price": 500000,
+                "status": "MODERATED",
+                "category_id": CATEGORY_ID,
+                "slug": "bluetooth-headphones",
+                "created_at": "2026-06-03T11:16:15.057Z"
             }
         ],
         "total_count": 1,
@@ -183,7 +187,7 @@ async def test_search_returns_matching_products(client: AsyncClient):
         
         assert response.status_code == 200
         data = response.json()
-        assert data["items"][0]["title"] == "Bluetooth Headphones"
+        assert data["items"][0]["name"] == "Bluetooth Headphones"
         
         called_args, called_kwargs = mock_client.get.call_args
         params = called_kwargs.get("params")
