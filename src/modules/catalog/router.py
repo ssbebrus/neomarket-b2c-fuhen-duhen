@@ -2,12 +2,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import UUID4
 
-from .schemas import CatalogProductDetail, CatalogProductCard, CategoryRef, CategoryTreeNode, CategoryDetail, BreadcrumbsResponse
+from .schemas import CatalogProductDetail, CatalogProductCard, CategoryRef, CategoryTreeNode, CategoryDetail, BreadcrumbsResponse, PaginatedCatalogProducts
 from .service import CatalogService, ALLOWED_SORTS
 
 router = APIRouter()
 
-@router.get("/catalog/products")
+@router.get("/catalog/products", response_model=PaginatedCatalogProducts)
 async def get_catalog_products(
     request: Request,
     sort: str = "popularity",

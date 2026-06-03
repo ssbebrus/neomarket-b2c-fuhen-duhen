@@ -36,15 +36,15 @@ class CatalogSku(BaseModel):
 class CatalogProductCard(BaseModel):
     id: UUID4
     name: str
-    slug: str
-    category: CategoryRef
+    slug: Optional[str] = None
+    category: Optional[CategoryRef] = None
     min_price: int
     old_price: Optional[int] = None
     has_stock: bool
     rating: Optional[float] = None
     reviews_count: int = 0
     images: List[ImageRef]
-    seller: SellerRef
+    seller: Optional[SellerRef] = None
 
 class CatalogProductDetail(CatalogProductCard):
     description: str
@@ -97,4 +97,11 @@ class BreadcrumbsMeta(BaseModel):
 class BreadcrumbsResponse(BaseModel):
     data: List[BreadcrumbItem]
     meta: BreadcrumbsMeta
+
+class PaginatedCatalogProducts(BaseModel):
+    items: List[CatalogProductCard]
+    total_count: int
+    limit: int
+    offset: int
+
 

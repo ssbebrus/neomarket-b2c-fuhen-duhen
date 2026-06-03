@@ -80,11 +80,18 @@ class CatalogService:
             try:
                 resp = await client.get("/api/v1/public/products", params=b2b_params)
                 resp.raise_for_status()
-                return resp.json()
+                data = resp.json()
             except httpx.HTTPStatusError as e:
                 raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
                 raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+
+        mapped_items = []
+        for item in data.get("items", []):
+            mapped_items.append(cls._map_listing_product_to_b2c(item))
+
+        data["items"] = mapped_items
+        return data
 
     @classmethod
     async def get_facets(cls, request: Request) -> dict:
@@ -223,6 +230,45 @@ class CatalogService:
             "skus": mapped_skus
         }
         return mapped_product
+
+    @classmethod
+    def _map_listing_product_to_b2c(cls, item: dict) -> dict:
+        import uuid
+        pid = item.get("id")
+        name = item.get("title") or item.get("name") or ""
+        slug = item.get("slug") or cls.slugify(name)
+        
+        min_price = item.get("min_price", 0)
+        has_stock = min_price > 0
+        
+        cover_url = item.get("cover_image")
+        images = []
+        if cover_url:
+            images = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "url": cover_url,
+                    "ordering": 0,
+                    "alt": "",
+                    "is_main": True
+                }
+            ]
+            
+        mapped = {
+            "id": pid,
+            "name": name,
+            "slug": slug,
+            "category": None,
+            "min_price": min_price,
+            "old_price": None,
+            "has_stock": has_stock,
+            "rating": None,
+            "reviews_count": 0,
+            "images": images,
+            "seller": None
+        }
+        
+        return mapped
 
     @classmethod
     async def get_product(cls, product_id: str) -> dict:
