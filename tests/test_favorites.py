@@ -1,12 +1,13 @@
 import pytest
 import uuid
 import jwt
+import httpx
 from httpx import AsyncClient, Response, HTTPStatusError, Request
 from unittest.mock import patch, AsyncMock
 from sqlalchemy import select
 
 from src.config import settings
-from src.modules.favorites.models import Favorite
+from src.modules.favorites.models import Favorite, ProductSubscription
 
 # Mock IDs
 USER_ID_A = uuid.uuid4()
@@ -284,3 +285,254 @@ async def test_b2b_unavailable_returns_503(client: AsyncClient):
         assert response.status_code == 503
         data = response.json()
         assert data["code"] == "B2B_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_returns_201_with_notify_on(client: AsyncClient, test_db):
+    """
+    happy: subscribe_returns_201_with_notify_on
+    """
+    token = generate_token(USER_ID_A)
+    mock_b2b_response = {
+        "id": str(PRODUCT_ID),
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "category_id": str(uuid.uuid4()),
+        "seller_id": str(uuid.uuid4()),
+        "images": [],
+        "characteristics": [],
+        "skus": [{"id": str(uuid.uuid4()), "name": "256GB Black", "price": 12999000, "active_quantity": 10}]
+    }
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        # Request to subscribe
+        response = await client.post(
+            f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+            json={"events": ["BACK_IN_STOCK", "PRICE_DROP"]},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 201
+        data = response.json()
+        assert data["product_id"] == str(PRODUCT_ID)
+        assert data["user_id"] == str(USER_ID_A)
+        assert set(data["events"]) == {"BACK_IN_STOCK", "PRICE_DROP"}
+        assert "created_at" in data
+
+        # Verify DB entry
+        stmt = select(ProductSubscription).where(
+            ProductSubscription.user_id == USER_ID_A,
+            ProductSubscription.product_id == PRODUCT_ID
+        )
+        result = await test_db.execute(stmt)
+        entry = result.scalars().first()
+        assert entry is not None
+        assert set(entry.notify_on) == {"BACK_IN_STOCK", "PRICE_DROP"}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_subscription_returns_409(client: AsyncClient, test_db):
+    """
+    unhappy: duplicate_subscription_returns_409
+    """
+    token = generate_token(USER_ID_A)
+    mock_b2b_response = {
+        "id": str(PRODUCT_ID),
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "category_id": str(uuid.uuid4()),
+        "seller_id": str(uuid.uuid4()),
+        "images": [],
+        "characteristics": [],
+        "skus": [{"id": str(uuid.uuid4()), "name": "256GB Black", "price": 12999000, "active_quantity": 10}]
+    }
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        # Add first subscription
+        response1 = await client.post(
+            f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+            json={"events": ["BACK_IN_STOCK"]},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response1.status_code == 201
+
+        # Add second subscription (duplicate) -> should return 409
+        response2 = await client.post(
+            f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+            json={"events": ["PRICE_DROP"]},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response2.status_code == 409
+        data2 = response2.json()
+        assert data2["code"] == "SUBSCRIPTION_ALREADY_EXISTS"
+
+
+@pytest.mark.asyncio
+async def test_invalid_notify_on_returns_400(client: AsyncClient, test_db):
+    """
+    unhappy: invalid_notify_on_returns_400
+    """
+    token = generate_token(USER_ID_A)
+
+    # Empty events list
+    response1 = await client.post(
+        f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+        json={"events": []},
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response1.status_code == 400
+    assert response1.json()["code"] == "VALIDATION_ERROR"
+
+    # Invalid event string
+    response2 = await client.post(
+        f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+        json={"events": ["INVALID_EVENT"]},
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response2.status_code == 400
+    assert response2.json()["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_unknown_product_returns_404(client: AsyncClient, test_db):
+    """
+    unhappy: subscribe_to_unknown_product_returns_404
+    """
+    token = generate_token(USER_ID_A)
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"code": "NOT_FOUND", "message": "Product not found"}
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            message="Not Found",
+            request=Request("GET", "http://b2b/api/v1/public/products/1"),
+            response=mock_response
+        )
+        mock_client.get.return_value = mock_response
+
+        # Request to subscribe to unknown product
+        response = await client.post(
+            f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+            json={"events": ["BACK_IN_STOCK"]},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 404
+        assert response.json()["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_returns_204_idempotent(client: AsyncClient, test_db):
+    """
+    DELETE is idempotent: removing existing or non-existing returns 204
+    """
+    token = generate_token(USER_ID_A)
+    
+    # 1. Add subscription to DB manually
+    sub = ProductSubscription(user_id=USER_ID_A, product_id=PRODUCT_ID, notify_on=["BACK_IN_STOCK"])
+    test_db.add(sub)
+    await test_db.commit()
+
+    # 2. Unsubscribe first time -> 204
+    response1 = await client.delete(
+        f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response1.status_code == 204
+
+    # Verify deleted from DB
+    stmt = select(ProductSubscription).where(
+        ProductSubscription.user_id == USER_ID_A,
+        ProductSubscription.product_id == PRODUCT_ID
+    )
+    result = await test_db.execute(stmt)
+    assert result.scalars().first() is None
+
+    # 3. Unsubscribe second time -> 204
+    response2 = await client.delete(
+        f"/api/v1/favorites/{PRODUCT_ID}/subscribe",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response2.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_subscribe_user_id_from_query_is_ignored(client: AsyncClient, test_db):
+    """
+    user_id from query params is ignored for subscription (IDOR protection)
+    """
+    token = generate_token(USER_ID_A)
+    mock_b2b_response = {
+        "id": str(PRODUCT_ID),
+        "title": "iPhone 15 Pro Max",
+        "slug": "iphone-15-pro-max",
+        "category_id": str(uuid.uuid4()),
+        "seller_id": str(uuid.uuid4()),
+        "images": [],
+        "characteristics": [],
+        "skus": [{"id": str(uuid.uuid4()), "name": "256GB Black", "price": 12999000, "active_quantity": 10}]
+    }
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_response
+        mock_response.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_response
+
+        # Request to subscribe with user_id query param pointing to USER_ID_B
+        response = await client.post(
+            f"/api/v1/favorites/{PRODUCT_ID}/subscribe?user_id={USER_ID_B}",
+            json={"events": ["BACK_IN_STOCK"]},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 201
+        data = response.json()
+        assert data["user_id"] == str(USER_ID_A)
+        assert data["user_id"] != str(USER_ID_B)
+        
+        # Verify DB has subscription for USER_ID_A, NOT USER_ID_B
+        stmt_a = select(ProductSubscription).where(
+            ProductSubscription.user_id == USER_ID_A,
+            ProductSubscription.product_id == PRODUCT_ID
+        )
+        result_a = await test_db.execute(stmt_a)
+        assert result_a.scalars().first() is not None
+
+        stmt_b = select(ProductSubscription).where(
+            ProductSubscription.user_id == USER_ID_B,
+            ProductSubscription.product_id == PRODUCT_ID
+        )
+        result_b = await test_db.execute(stmt_b)
+        assert result_b.scalars().first() is None
+
