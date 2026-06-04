@@ -16,3 +16,21 @@ class B2BServiceUnavailable(Exception):
 class SubscriptionAlreadyExists(Exception):
     pass
 
+
+class SKUNotFound(Exception):
+    pass
+
+
+class ProductUnavailable(Exception):
+    pass
+
+
+class CartItemNotFound(Exception):
+    pass
+
+
+class InsufficientStock(Exception):
+    pass
+
+
+
