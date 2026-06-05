@@ -1,7 +1,9 @@
 from contextlib import contextmanager
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import UUID4
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.db.database import get_db
 
 from src.core.exceptions import (
     ProductNotFound,
@@ -11,8 +13,19 @@ from src.core.exceptions import (
     MissingBreadcrumbParams,
     B2BServiceUnavailable,
     B2BServiceError,
+    CollectionNotFound,
 )
-from .schemas import CatalogProductDetail, CatalogProductCard, CategoryRef, CategoryTreeNode, CategoryDetail, BreadcrumbsResponse, PaginatedCatalogProducts
+from .schemas import (
+    CatalogProductDetail,
+    CatalogProductCard,
+    CategoryRef,
+    CategoryTreeNode,
+    CategoryDetail,
+    BreadcrumbsResponse,
+    PaginatedCatalogProducts,
+    Collection,
+    CollectionProductsResponse,
+)
 from .service import CatalogService, ALLOWED_SORTS
 
 router = APIRouter()
@@ -55,6 +68,11 @@ def handle_catalog_exceptions():
         raise HTTPException(
             status_code=e.status_code,
             detail=e.detail
+        )
+    except CollectionNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": "Collection not found"}
         )
 
 
@@ -156,3 +174,24 @@ async def get_catalog_breadcrumbs(
             category_id=str(category_id) if category_id else None,
             product_id=str(product_id) if product_id else None
         )
+
+
+@router.get("/catalog/collections", response_model=list[Collection])
+async def get_catalog_collections(
+    limit: int = 10,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db)
+):
+    with handle_catalog_exceptions():
+        return await CatalogService.get_collections(db, limit, offset)
+
+
+@router.get("/catalog/collections/{collection_id}/products", response_model=CollectionProductsResponse)
+async def get_catalog_collection_products(
+    collection_id: UUID4,
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db)
+):
+    with handle_catalog_exceptions():
+        return await CatalogService.get_collection_products(db, str(collection_id), limit, offset)

@@ -55,5 +55,10 @@ class B2BServiceError(Exception):
         self.detail = detail
 
 
+class CollectionNotFound(Exception):
+    pass
+
+
+
 
 
