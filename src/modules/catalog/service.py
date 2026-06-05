@@ -1,8 +1,17 @@
 import httpx
 import re
 from typing import Optional
-from fastapi import Request, HTTPException
+from fastapi import Request
 from src.config import settings
+from src.core.exceptions import (
+    OrphanCategoryNode,
+    AmbiguousBreadcrumbParams,
+    MissingBreadcrumbParams,
+    CategoryNotFound,
+    ProductNotFound,
+    B2BServiceUnavailable,
+    B2BServiceError,
+)
 
 ALLOWED_SORTS = {"price_asc", "price_desc", "popularity", "new"}
 
@@ -82,9 +91,9 @@ class CatalogService:
                 resp.raise_for_status()
                 data = resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
         mapped_items = []
         for item in data.get("items", []):
@@ -123,9 +132,9 @@ class CatalogService:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
     @classmethod
     async def get_category_filters(cls, category_id: str) -> dict:
@@ -135,9 +144,9 @@ class CatalogService:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
     @classmethod
     def _map_product_to_b2c(cls, b2b_data: dict) -> dict:
@@ -282,10 +291,10 @@ class CatalogService:
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                    raise ProductNotFound()
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
     @classmethod
     async def get_similar_products(cls, product_id: str, limit: int) -> list:
@@ -293,16 +302,30 @@ class CatalogService:
             try:
                 resp = await client.get(f"/api/v1/public/products/{product_id}/similar", params={"limit": limit})
                 resp.raise_for_status()
-                data = resp.json()
+                similar_data = resp.json()
+                if not similar_data:
+                    return []
                 
-                return [cls._map_product_to_b2c(p) for p in data]
+                product_ids = [p["id"] for p in similar_data]
+                batch_resp = await client.post("/api/v1/public/products/batch", json={"product_ids": product_ids})
+                batch_resp.raise_for_status()
+                full_products = batch_resp.json()
+                
+                full_products_by_id = {p["id"]: p for p in full_products}
+                ordered_full_products = []
+                for p_short in similar_data:
+                    p_id = p_short["id"]
+                    if p_id in full_products_by_id:
+                        ordered_full_products.append(full_products_by_id[p_id])
+                
+                return [cls._map_product_to_b2c(p) for p in ordered_full_products]
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                    raise ProductNotFound()
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
     @staticmethod
     def slugify(text: str) -> str:
@@ -343,10 +366,7 @@ class CatalogService:
         path_parts = path_str.split(".")
         for part in path_parts:
             if part not in all_categories_by_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": "orphan_node", "message": "category hierarchy is broken"}
-                )
+                raise OrphanCategoryNode()
 
     @classmethod
     async def get_categories(cls) -> list:
@@ -356,9 +376,9 @@ class CatalogService:
                 resp.raise_for_status()
                 b2b_cats = resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
         mapped = []
         for cat in b2b_cats:
@@ -382,9 +402,9 @@ class CatalogService:
                 resp.raise_for_status()
                 b2b_cats = resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
         # Build ID lookup and verify orphan nodes
         all_cats_by_id = {c["id"]: c for c in b2b_cats}
@@ -394,10 +414,7 @@ class CatalogService:
                 path_parts = path_str.split(".")
                 for part in path_parts:
                     if part not in all_cats_by_id:
-                        raise HTTPException(
-                            status_code=422,
-                            detail={"error": "orphan_node", "message": "category hierarchy is broken"}
-                        )
+                        raise OrphanCategoryNode()
 
         # Build nodes
         nodes = {}
@@ -431,16 +448,13 @@ class CatalogService:
                 resp.raise_for_status()
                 b2b_cats = resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
         all_cats_by_id = {c["id"]: c for c in b2b_cats}
         if category_id not in all_cats_by_id:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "NOT_FOUND", "message": "Category not found"}
-            )
+            raise CategoryNotFound()
 
         # Orphan check
         cls.check_orphan_node(category_id, all_cats_by_id)
@@ -500,15 +514,9 @@ class CatalogService:
     @classmethod
     async def get_breadcrumbs(cls, category_id: Optional[str] = None, product_id: Optional[str] = None) -> dict:
         if category_id is not None and product_id is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "ambiguous_param", "message": "only one of category_id or product_id must be provided"}
-            )
+            raise AmbiguousBreadcrumbParams()
         if category_id is None and product_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "missing_param", "message": "category_id or product_id must be provided"}
-            )
+            raise MissingBreadcrumbParams()
 
         resolved_category_id = category_id
         resolved_via = "category_id"
@@ -519,25 +527,19 @@ class CatalogService:
                 try:
                     p_resp = await client.get(f"/api/v1/public/products/{product_id}")
                     if p_resp.status_code == 404:
-                        raise HTTPException(
-                            status_code=404,
-                            detail={"code": "NOT_FOUND", "message": "Product not found"}
-                        )
+                        raise ProductNotFound()
                     p_resp.raise_for_status()
                     product_data = p_resp.json()
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 404:
-                        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
-                    raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                        raise ProductNotFound()
+                    raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
                 except httpx.RequestError:
-                    raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                    raise B2BServiceUnavailable()
 
             category_obj = product_data.get("category")
             if not category_obj or "id" not in category_obj:
-                raise HTTPException(
-                    status_code=404,
-                    detail={"code": "NOT_FOUND", "message": "Category not found"}
-                )
+                raise CategoryNotFound()
             resolved_category_id = category_obj["id"]
 
         # Fetch all categories
@@ -547,16 +549,13 @@ class CatalogService:
                 resp.raise_for_status()
                 b2b_cats = resp.json()
             except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=e.response.json())
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
             except httpx.RequestError:
-                raise HTTPException(status_code=502, detail={"code": "BAD_GATEWAY", "message": "B2B service is unavailable"})
+                raise B2BServiceUnavailable()
 
         all_cats_by_id = {c["id"]: c for c in b2b_cats}
         if resolved_category_id not in all_cats_by_id:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "NOT_FOUND", "message": "Category not found"}
-            )
+            raise CategoryNotFound()
 
         # Check orphan node
         cls.check_orphan_node(resolved_category_id, all_cats_by_id)
@@ -569,10 +568,7 @@ class CatalogService:
         cumulative_url = "/catalog"
         for i, path_part_id in enumerate(path_parts):
             if path_part_id not in all_cats_by_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": "orphan_node", "message": "category hierarchy is broken"}
-                )
+                raise OrphanCategoryNode()
             cat_item = all_cats_by_id[path_part_id]
             slug = cls.slugify(cat_item["name"])
             cumulative_url = f"{cumulative_url}/{slug}"

@@ -33,4 +33,27 @@ class InsufficientStock(Exception):
     pass
 
 
+class OrphanCategoryNode(Exception):
+    pass
+
+
+class AmbiguousBreadcrumbParams(Exception):
+    pass
+
+
+class MissingBreadcrumbParams(Exception):
+    pass
+
+
+class CategoryNotFound(Exception):
+    pass
+
+
+class B2BServiceError(Exception):
+    def __init__(self, status_code: int, detail: str | dict):
+        self.status_code = status_code
+        self.detail = detail
+
+
+
 
