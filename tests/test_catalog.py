@@ -546,6 +546,19 @@ async def test_similar_returns_up_to_10_from_same_category(client: AsyncClient):
             ]
         })
     
+    mock_b2b_short_products = []
+    for p in mock_b2b_products:
+        mock_b2b_short_products.append({
+            "id": p["id"],
+            "title": p["title"],
+            "slug": p["slug"],
+            "status": p["status"],
+            "category_id": p["category_id"],
+            "min_price": 1000,
+            "cover_image": "url",
+            "created_at": "2026-06-03T11:16:15.057Z"
+        })
+
     with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
@@ -556,11 +569,21 @@ async def test_similar_returns_up_to_10_from_same_category(client: AsyncClient):
             from httpx import Response
             response = AsyncMock(spec=Response)
             response.status_code = 200
-            response.json.return_value = mock_b2b_products[:limit]
+            response.json.return_value = mock_b2b_short_products[:limit]
+            response.raise_for_status.return_value = None
+            return response
+
+        async def mock_b2b_post(url, json=None, **kwargs):
+            from httpx import Response
+            product_ids = json.get("product_ids", [])
+            response = AsyncMock(spec=Response)
+            response.status_code = 200
+            response.json.return_value = [p for p in mock_b2b_products if p["id"] in product_ids]
             response.raise_for_status.return_value = None
             return response
 
         mock_client.get.side_effect = mock_b2b_get
+        mock_client.post.side_effect = mock_b2b_post
 
         response = await client.get(f"/api/v1/catalog/products/{PRODUCT_ID}/similar?limit=10")
         
@@ -574,6 +597,10 @@ async def test_similar_returns_up_to_10_from_same_category(client: AsyncClient):
         called_args, called_kwargs = mock_client.get.call_args
         assert called_args[0] == f"/api/v1/public/products/{PRODUCT_ID}/similar"
         assert called_kwargs.get("params") == {"limit": 10}
+
+        post_called_args, post_called_kwargs = mock_client.post.call_args
+        assert post_called_args[0] == "/api/v1/public/products/batch"
+        assert "product_ids" in post_called_kwargs.get("json", {})
 
 
 @pytest.mark.asyncio
@@ -749,13 +776,13 @@ async def test_ambiguous_params_returns_400(client: AsyncClient):
     response = await client.get("/api/v1/catalog/breadcrumbs?category_id=123e4567-e89b-42d3-a456-426614174003&product_id=770e8400-e29b-41d4-a716-446655440002")
     assert response.status_code == 400
     data = response.json()
-    assert data["error"] == "ambiguous_param"
+    assert data["code"] == "AMBIGUOUS_PARAM"
     
     # None provided
     response2 = await client.get("/api/v1/catalog/breadcrumbs")
     assert response2.status_code == 400
     data2 = response2.json()
-    assert data2["error"] == "missing_param"
+    assert data2["code"] == "MISSING_PARAM"
 
 
 @pytest.mark.asyncio
@@ -784,17 +811,17 @@ async def test_orphan_node_returns_422(client: AsyncClient):
         # Tree returns 422
         response_tree = await client.get("/api/v1/catalog/categories/tree")
         assert response_tree.status_code == 422
-        assert response_tree.json()["error"] == "orphan_node"
+        assert response_tree.json()["code"] == "ORPHAN_NODE"
 
         # Details returns 422
         response_detail = await client.get("/api/v1/catalog/categories/123e4567-e89b-42d3-a456-426614174003")
         assert response_detail.status_code == 422
-        assert response_detail.json()["error"] == "orphan_node"
+        assert response_detail.json()["code"] == "ORPHAN_NODE"
 
         # Breadcrumbs returns 422
         response_crumbs = await client.get("/api/v1/catalog/breadcrumbs?category_id=123e4567-e89b-42d3-a456-426614174003")
         assert response_crumbs.status_code == 422
-        assert response_crumbs.json()["error"] == "orphan_node"
+        assert response_crumbs.json()["code"] == "ORPHAN_NODE"
 
 
 @pytest.mark.asyncio
