@@ -105,3 +105,23 @@ class PaginatedCatalogProducts(BaseModel):
     offset: int
 
 
+class Collection(BaseModel):
+    id: UUID4
+    name: str
+    description: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    target_url: Optional[str] = None
+    priority: int
+    is_active: bool
+    start_date: Optional[Any] = None
+    created_at: Any
+    products: List[CatalogProductCard] = []
+
+
+class CollectionProductsResponse(BaseModel):
+    collection_title: str
+    items: List[CatalogProductCard]
+    unavailable_ids: List[UUID4]
+
+
+

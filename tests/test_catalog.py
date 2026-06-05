@@ -2,6 +2,10 @@ import pytest
 from httpx import AsyncClient, RequestError, HTTPStatusError, Request, Response
 from unittest.mock import patch, AsyncMock
 import uuid
+import datetime
+from typing import Any
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.modules.catalog.models import Collection, CollectionProduct
 
 CATEGORY_ID = "123e4567-e89b-42d3-a456-426614174001"
 PRODUCT_ID = "770e8400-e29b-41d4-a716-446655440002"
@@ -841,5 +845,245 @@ async def test_unknown_category_returns_404(client: AsyncClient):
         response = await client.get("/api/v1/catalog/categories/123e4567-e89b-42d3-a456-426614174009")
         assert response.status_code == 404
         assert response.json()["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_collections_list_returns_metadata_without_products(client: AsyncClient, test_db: AsyncSession):
+    # Seed data
+    col1 = Collection(
+        id=uuid.uuid4(),
+        title="Bestsellers",
+        description="Best selling products",
+        cover_image_url="http://example.com/cover1.jpg",
+        target_url="http://example.com/target1",
+        priority=10,
+        is_active=True,
+        start_date=datetime.date.today()
+    )
+    col2 = Collection(
+        id=uuid.uuid4(),
+        title="Winter season",
+        description="Winter season products",
+        cover_image_url="http://example.com/cover2.jpg",
+        target_url="http://example.com/target2",
+        priority=20,
+        is_active=True,
+        start_date=datetime.date.today() - datetime.timedelta(days=1)
+    )
+    col_inactive = Collection(
+        id=uuid.uuid4(),
+        title="Inactive Collection",
+        description="This should not be returned",
+        cover_image_url="http://example.com/cover3.jpg",
+        target_url="http://example.com/target3",
+        priority=5,
+        is_active=False
+    )
+    col_future = Collection(
+        id=uuid.uuid4(),
+        title="Future Collection",
+        description="This should not be returned yet",
+        cover_image_url="http://example.com/cover4.jpg",
+        target_url="http://example.com/target4",
+        priority=30,
+        is_active=True,
+        start_date=datetime.date.today() + datetime.timedelta(days=1)
+    )
+    test_db.add_all([col1, col2, col_inactive, col_future])
+    await test_db.commit()
+
+    response = await client.get("/api/v1/catalog/collections")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    
+    assert data[0]["name"] == "Winter season"
+    assert data[0]["cover_image_url"] == "http://example.com/cover2.jpg"
+    assert data[0]["products"] == []
+    assert data[1]["name"] == "Bestsellers"
+    assert data[1]["products"] == []
+
+
+@pytest.mark.asyncio
+async def test_collection_products_enriched_from_b2b(client: AsyncClient, test_db: AsyncSession):
+    col_id = uuid.uuid4()
+    prod1_id = uuid.uuid4()
+    prod2_id = uuid.uuid4()
+    
+    col = Collection(
+        id=col_id,
+        title="Hot Collection",
+        is_active=True
+    )
+    cp1 = CollectionProduct(collection_id=col_id, product_id=prod1_id, ordering=2)
+    cp2 = CollectionProduct(collection_id=col_id, product_id=prod2_id, ordering=1)
+    
+    test_db.add(col)
+    test_db.add_all([cp1, cp2])
+    await test_db.commit()
+
+    mock_b2b_products = [
+        {
+            "id": str(prod2_id),
+            "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "category_id": CATEGORY_ID,
+            "category": {
+                "id": CATEGORY_ID,
+                "name": "Electronics",
+                "level": 0,
+                "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+            },
+            "seller": {"id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "display_name": "Apple"},
+            "title": "iPhone 15 Pro",
+            "slug": "iphone-15-pro",
+            "description": "...",
+            "status": "MODERATED",
+            "images": [],
+            "characteristics": [],
+            "skus": [{"id": str(uuid.uuid4()), "price": 100000, "active_quantity": 5}]
+        },
+        {
+            "id": str(prod1_id),
+            "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "category_id": CATEGORY_ID,
+            "category": {
+                "id": CATEGORY_ID,
+                "name": "Electronics",
+                "level": 0,
+                "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+            },
+            "seller": {"id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "display_name": "Apple"},
+            "title": "MacBook Air",
+            "slug": "macbook-air",
+            "description": "...",
+            "status": "MODERATED",
+            "images": [],
+            "characteristics": [],
+            "skus": [{"id": str(uuid.uuid4()), "price": 200000, "active_quantity": 3}]
+        }
+    ]
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_products
+        mock_response.raise_for_status.return_value = None
+        mock_client.post.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/collections/{col_id}/products?limit=10&offset=0")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["collection_title"] == "Hot Collection"
+        assert len(data["items"]) == 2
+        assert data["items"][0]["id"] == str(prod2_id)
+        assert data["items"][0]["name"] == "iPhone 15 Pro"
+        assert data["items"][1]["id"] == str(prod1_id)
+        assert data["items"][1]["name"] == "MacBook Air"
+        assert data["unavailable_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_products_in_unavailable_ids(client: AsyncClient, test_db: AsyncSession):
+    col_id = uuid.uuid4()
+    prod_active_id = uuid.uuid4()
+    prod_blocked_id = uuid.uuid4()
+    
+    col = Collection(id=col_id, title="Mixed Collection", is_active=True)
+    cp1 = CollectionProduct(collection_id=col_id, product_id=prod_active_id, ordering=1)
+    cp2 = CollectionProduct(collection_id=col_id, product_id=prod_blocked_id, ordering=2)
+    
+    test_db.add(col)
+    test_db.add_all([cp1, cp2])
+    await test_db.commit()
+
+    mock_b2b_products = [
+        {
+            "id": str(prod_active_id),
+            "seller_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "category_id": CATEGORY_ID,
+            "category": {
+                "id": CATEGORY_ID,
+                "name": "Electronics",
+                "level": 0,
+                "path": f"3fa85f64-5717-4562-b3fc-2c963f66afa6.{CATEGORY_ID}"
+            },
+            "seller": {"id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "display_name": "Apple"},
+            "title": "Active Product",
+            "slug": "active-product",
+            "description": "...",
+            "status": "MODERATED",
+            "images": [],
+            "characteristics": [],
+            "skus": [{"id": str(uuid.uuid4()), "price": 1000, "active_quantity": 5}]
+        }
+    ]
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_products
+        mock_response.raise_for_status.return_value = None
+        mock_client.post.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/collections/{col_id}/products")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 1
+        assert data["items"][0]["id"] == str(prod_active_id)
+        assert data["unavailable_ids"] == [str(prod_blocked_id)]
+
+
+@pytest.mark.asyncio
+async def test_unknown_collection_returns_404(client: AsyncClient):
+    random_id = uuid.uuid4()
+    response = await client.get(f"/api/v1/catalog/collections/{random_id}/products")
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "NOT_FOUND"
+    assert "Collection not found" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_all_products_unavailable(client: AsyncClient, test_db: AsyncSession):
+    col_id = uuid.uuid4()
+    prod_blocked_id = uuid.uuid4()
+    
+    col = Collection(id=col_id, title="Blocked Collection", is_active=True)
+    cp = CollectionProduct(collection_id=col_id, product_id=prod_blocked_id, ordering=1)
+    
+    test_db.add(col)
+    test_db.add(cp)
+    await test_db.commit()
+
+    # B2B returns empty list (all requested IDs are blocked/deleted)
+    mock_b2b_products = []
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+        
+        mock_response = AsyncMock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_b2b_products
+        mock_response.raise_for_status.return_value = None
+        mock_client.post.return_value = mock_response
+
+        response = await client.get(f"/api/v1/catalog/collections/{col_id}/products")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == []
+        assert data["unavailable_ids"] == [str(prod_blocked_id)]
+
+
 
 

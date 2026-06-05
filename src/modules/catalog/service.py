@@ -2,6 +2,7 @@ import httpx
 import re
 from typing import Optional
 from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import settings
 from src.core.exceptions import (
     OrphanCategoryNode,
@@ -11,6 +12,7 @@ from src.core.exceptions import (
     ProductNotFound,
     B2BServiceUnavailable,
     B2BServiceError,
+    CollectionNotFound,
 )
 
 ALLOWED_SORTS = {"price_asc", "price_desc", "popularity", "new"}
@@ -588,4 +590,116 @@ class CatalogService:
                 "category_id": resolved_category_id
             }
         }
+
+    @classmethod
+    async def get_collections(cls, db: AsyncSession, limit: int = 10, offset: int = 0) -> list[dict]:
+        import datetime
+        from sqlalchemy import select, and_, or_
+        from src.modules.catalog.models import Collection
+
+        today = datetime.date.today()
+        stmt = (
+            select(Collection)
+            .where(
+                and_(
+                    Collection.is_active == True,
+                    or_(
+                        Collection.start_date == None,
+                        Collection.start_date <= today
+                    )
+                )
+            )
+            .order_by(Collection.priority.desc(), Collection.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await db.execute(stmt)
+        collections = result.scalars().all()
+
+        mapped = []
+        for col in collections:
+            mapped.append({
+                "id": col.id,
+                "name": col.title,
+                "description": col.description,
+                "cover_image_url": col.cover_image_url,
+                "target_url": col.target_url,
+                "priority": col.priority,
+                "is_active": col.is_active,
+                "start_date": col.start_date.isoformat() if col.start_date else None,
+                "created_at": col.created_at.isoformat() if col.created_at else None,
+                "products": []
+            })
+        return mapped
+
+    @classmethod
+    async def get_collection_products(cls, db: AsyncSession, collection_id: str, limit: int = 20, offset: int = 0) -> dict:
+        import uuid
+        from sqlalchemy import select
+        from src.modules.catalog.models import Collection, CollectionProduct
+
+        try:
+            coll_uuid = uuid.UUID(collection_id)
+        except ValueError:
+            raise CollectionNotFound()
+
+        stmt_coll = select(Collection).where(Collection.id == coll_uuid)
+        res_coll = await db.execute(stmt_coll)
+        collection = res_coll.scalars().first()
+        if not collection:
+            raise CollectionNotFound()
+
+        stmt_prod = (
+            select(CollectionProduct)
+            .where(CollectionProduct.collection_id == coll_uuid)
+            .order_by(CollectionProduct.ordering.asc())
+        )
+        res_prod = await db.execute(stmt_prod)
+        all_relations = res_prod.scalars().all()
+        
+        paginated_relations = all_relations[offset:offset+limit]
+        product_ids = [str(r.product_id) for r in paginated_relations]
+
+        if not product_ids:
+            return {
+                "collection_title": collection.title,
+                "items": [],
+                "unavailable_ids": []
+            }
+
+        async with await cls.get_b2b_client() as client:
+            try:
+                resp = await client.post("/api/v1/public/products/batch", json={"product_ids": product_ids})
+                if resp.status_code == 404:
+                    b2b_products = []
+                else:
+                    resp.raise_for_status()
+                    b2b_products = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise B2BServiceError(status_code=e.response.status_code, detail=e.response.json())
+            except httpx.RequestError:
+                raise B2BServiceUnavailable()
+
+        b2b_products_by_id = {}
+        for p in b2b_products:
+            try:
+                mapped_p = cls._map_product_to_b2c(p)
+                b2b_products_by_id[mapped_p["id"]] = mapped_p
+            except Exception:
+                continue
+
+        items = []
+        unavailable_ids = []
+        for pid in product_ids:
+            if pid in b2b_products_by_id:
+                items.append(b2b_products_by_id[pid])
+            else:
+                unavailable_ids.append(uuid.UUID(pid))
+
+        return {
+            "collection_title": collection.title,
+            "items": items,
+            "unavailable_ids": unavailable_ids
+        }
+
 
