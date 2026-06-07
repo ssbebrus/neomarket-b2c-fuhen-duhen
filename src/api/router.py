@@ -5,6 +5,7 @@ from src.modules.cart.router import router as cart_router
 from src.modules.banners.router import router as banners_router
 from src.modules.orders.router import router as orders_router
 from src.modules.events.router import router as events_router
+from src.modules.operator.router import router as operator_router
 
 api_router = APIRouter()
 api_router.include_router(catalog_router, tags=["Catalog"])
@@ -13,5 +14,6 @@ api_router.include_router(cart_router, tags=["Cart"])
 api_router.include_router(banners_router, tags=["Banners"])
 api_router.include_router(orders_router, tags=["Orders"])
 api_router.include_router(events_router, tags=["B2B Events"])
+api_router.include_router(operator_router, tags=["Operator"])
 
 

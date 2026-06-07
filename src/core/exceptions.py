@@ -91,6 +91,11 @@ class OrderCancelNotAllowed(OrderException):
         self.current_status = current_status
 
 
+class OrderAdvanceNotAllowed(OrderException):
+    def __init__(self, current_status: str):
+        self.current_status = current_status
+
+
 
 
 
