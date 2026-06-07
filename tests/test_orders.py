@@ -616,6 +616,9 @@ async def test_cancel_paid_order_transitions_to_cancelled(client: AsyncClient, t
 @pytest.mark.asyncio
 async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClient, test_db):
     from datetime import datetime, timezone
+    import asyncio
+    from src.modules.orders.service import OrdersService
+    
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     order_id = uuid.uuid4()
     order = Order(
@@ -632,7 +635,18 @@ async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClie
         payment_method_id=PAYMENT_METHOD_ID,
         created_at=now
     )
+    item = OrderItem(
+        order_id=order_id,
+        sku_id=SKU_ID_A,
+        product_id=PRODUCT_ID_A,
+        name="iPhone 15 Pro Max 256GB Black",
+        sku_code="SKU-IPHONE-15",
+        quantity=2,
+        unit_price=5000,
+        line_total=10000
+    )
     test_db.add(order)
+    test_db.add(item)
     await test_db.commit()
 
     token = generate_token(USER_ID)
@@ -658,6 +672,28 @@ async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClie
         res = await test_db.execute(stmt)
         db_order = res.scalars().first()
         assert db_order.status == "CANCEL_PENDING"
+
+    # Now verify the background worker picks it up and retries successfully
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client_worker:
+        mock_client_worker = AsyncMock()
+        mock_get_client_worker.return_value = mock_client_worker
+        mock_client_worker.__aenter__.return_value = mock_client_worker
+        
+        mock_unreserve_resp = AsyncMock(spec=Response)
+        mock_unreserve_resp.status_code = 200
+        mock_unreserve_resp.json = lambda: {"unreserved": True}
+        mock_unreserve_resp.raise_for_status.return_value = None
+        mock_client_worker.post.return_value = mock_unreserve_resp
+
+        # Call process_cancel_pending directly using the test_db session
+        await OrdersService.process_cancel_pending(test_db)
+
+        # Check DB: order status must be CANCELLED now
+        stmt = select(Order).where(Order.id == order_id)
+        res = await test_db.execute(stmt)
+        db_order = res.scalars().first()
+        assert db_order.status == "CANCELLED"
+
 
 
 @pytest.mark.asyncio
