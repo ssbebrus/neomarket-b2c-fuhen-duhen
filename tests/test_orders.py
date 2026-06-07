@@ -545,3 +545,183 @@ async def test_other_user_order_returns_404_not_403(client: AsyncClient, test_db
     assert response.status_code == 404
     data = response.json()
     assert data["code"] == "ORDER_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_cancel_paid_order_transitions_to_cancelled(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000006",
+        buyer_id=USER_ID,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=10000,
+        delivery_cost=0,
+        total=10000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    item = OrderItem(
+        order_id=order_id,
+        sku_id=SKU_ID_A,
+        product_id=PRODUCT_ID_A,
+        name="iPhone 15 Pro Max 256GB Black",
+        sku_code="SKU-IPHONE-15",
+        quantity=2,
+        unit_price=5000,
+        line_total=10000
+    )
+    test_db.add(order)
+    test_db.add(item)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+
+        # Mock B2B unreserve returning 200 OK
+        mock_unreserve_resp = AsyncMock(spec=Response)
+        mock_unreserve_resp.status_code = 200
+        mock_unreserve_resp.json = lambda: {
+            "unreserved": True,
+            "items": [{"sku_id": str(SKU_ID_A), "unreserved_quantity": 2, "remaining_stock": 50}]
+        }
+        mock_unreserve_resp.raise_for_status.return_value = None
+        mock_client.post.return_value = mock_unreserve_resp
+
+        response = await client.post(
+            f"/api/v1/orders/{order_id}/cancel",
+            json={"reason": "Клиент передумал"},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "CANCELLED"
+        assert data["cancel_reason"] == "Клиент передумал"
+
+        # Check DB
+        stmt = select(Order).where(Order.id == order_id)
+        res = await test_db.execute(stmt)
+        db_order = res.scalars().first()
+        assert db_order.status == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000007",
+        buyer_id=USER_ID,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=10000,
+        delivery_cost=0,
+        total=10000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    test_db.add(order)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+
+        # Mock B2B unreserve throws exception (B2B down)
+        mock_client.post.side_effect = Exception("Connection Timeout")
+
+        response = await client.post(
+            f"/api/v1/orders/{order_id}/cancel",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        # B2C-11 specifies it transitions to CANCEL_PENDING but still returns 200 OK
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "CANCEL_PENDING"
+
+        # Check DB
+        stmt = select(Order).where(Order.id == order_id)
+        res = await test_db.execute(stmt)
+        db_order = res.scalars().first()
+        assert db_order.status == "CANCEL_PENDING"
+
+
+@pytest.mark.asyncio
+async def test_cancel_assembling_order_returns_409(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000008",
+        buyer_id=USER_ID,
+        status="ASSEMBLING",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=10000,
+        delivery_cost=0,
+        total=10000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    test_db.add(order)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    response = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 409
+    data = response.json()
+    assert data["code"] == "CANCEL_NOT_ALLOWED"
+    assert data["current_status"] == "ASSEMBLING"
+
+
+@pytest.mark.asyncio
+async def test_other_user_order_returns_404_on_cancel(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    other_user_id = uuid.uuid4()
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000009",
+        buyer_id=other_user_id,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=5000,
+        delivery_cost=0,
+        total=5000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    test_db.add(order)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    response = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "ORDER_NOT_FOUND"
+
