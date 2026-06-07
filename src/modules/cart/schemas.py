@@ -22,6 +22,7 @@ class CartItem(BaseModel):
     line_total: int
     available_quantity: int = Field(..., ge=0)
     is_available: bool
+    unavailable_reason: Optional[str] = None
     image: Optional[ImageRef] = None
 
 class CartResponse(BaseModel):

@@ -162,7 +162,7 @@ class CartService:
 
             # Determine if SKU is available
             is_available = True
-            if is_deleted or is_blocked or is_on_moderation:
+            if is_deleted or is_blocked or is_on_moderation or item.unavailable_reason:
                 is_available = False
             elif active_stock <= 0:
                 is_available = False
@@ -213,6 +213,7 @@ class CartService:
                     line_total=line_total,
                     available_quantity=active_stock,
                     is_available=is_available,
+                    unavailable_reason=item.unavailable_reason,
                     image=image_ref
                 )
             )

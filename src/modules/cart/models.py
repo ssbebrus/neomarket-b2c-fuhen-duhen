@@ -49,10 +49,28 @@ class CartItem(Base):
         onupdate=func.now(),
         nullable=False
     )
+    unavailable_reason: Mapped[Optional[str]] = mapped_column(
+        String,
+        nullable=True
+    )
 
     __table_args__ = (
         CheckConstraint("quantity >= 1", name="check_quantity_min"),
         CheckConstraint("user_id IS NOT NULL OR session_id IS NOT NULL", name="cart_identity"),
         Index("idx_cart_user_sku", "user_id", "sku_id", unique=True, postgresql_where=text("user_id IS NOT NULL")),
         Index("idx_cart_session_sku", "session_id", "sku_id", unique=True, postgresql_where=text("session_id IS NOT NULL")),
+    )
+
+
+class EventIdempotencyKey(Base):
+    __tablename__ = "event_idempotency_keys"
+
+    key: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False
     )
