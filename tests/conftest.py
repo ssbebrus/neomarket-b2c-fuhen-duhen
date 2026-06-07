@@ -50,9 +50,13 @@ async def test_db(test_engine) -> AsyncGenerator[AsyncSession, None]:
     # но внешняя транзакция остается активной и будет откатана в конце теста.
     # Но чтобы сессия могла продолжать работу после "commit", нам нужно переоткрывать savepoint.
     
+    in_cleanup = False
+
     @event.listens_for(session.sync_session, "after_transaction_end")
     def end_savepoint(session_, transaction):
         nonlocal nested
+        if in_cleanup:
+            return
         if not connection.closed and not connection.in_nested_transaction():
             # SQLAlchemy 2.0 requires restarting the savepoint manually
             nested = connection.sync_connection.begin_nested()
@@ -65,9 +69,8 @@ async def test_db(test_engine) -> AsyncGenerator[AsyncSession, None]:
     yield session
 
     # Откатываем все изменения к началу теста
+    in_cleanup = True
     try:
-        if connection.in_nested_transaction():
-            await nested.rollback()
         await trans.rollback()
     except Exception:
         pass

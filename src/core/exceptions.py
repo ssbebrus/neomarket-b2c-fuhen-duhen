@@ -59,6 +59,30 @@ class CollectionNotFound(Exception):
     pass
 
 
+class OrderException(Exception):
+    pass
+
+
+class OrderEmptyCartException(OrderException):
+    pass
+
+
+class OrderIdempotencyConflict(OrderException):
+    pass
+
+
+class OrderSnapshotMismatch(OrderException):
+    def __init__(self, cart: dict, issues: list):
+        self.cart = cart
+        self.issues = issues
+
+
+class OrderReserveFailed(OrderException):
+    def __init__(self, failed_items: list):
+        self.failed_items = failed_items
+
+
+
 
 
 
