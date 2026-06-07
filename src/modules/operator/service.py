@@ -155,6 +155,27 @@ class OperatorService:
 
         if next_status == "DELIVERED":
             order.delivered_at = now
+            # Call B2B fulfill
+            from src.modules.catalog.service import CatalogService
+            b2b_items = [
+                {"sku_id": str(item.sku_id), "quantity": item.quantity}
+                for item in order.items
+            ]
+            try:
+                async with await CatalogService.get_b2b_client() as client:
+                    resp = await client.post(
+                        "/api/v1/inventory/fulfill",
+                        json={
+                            "order_id": str(order.id),
+                            "items": b2b_items
+                        }
+                    )
+                    resp.raise_for_status()
+                    order.b2b_fulfilled = True
+            except Exception as e:
+                logger.error(
+                    f"Operator: failed to fulfill order {order.id} in B2B: {e}"
+                )
 
         history_list = order.status_history.get("history", []) if order.status_history else []
         history_list.append({

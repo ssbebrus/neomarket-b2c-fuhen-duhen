@@ -9,12 +9,14 @@ from src.modules.orders.service import OrdersService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(OrdersService.run_cancel_pending_worker())
+    cancel_task = asyncio.create_task(OrdersService.run_cancel_pending_worker())
+    fulfill_task = asyncio.create_task(OrdersService.run_fulfill_worker())
     yield
-    task.cancel()
+    cancel_task.cancel()
+    fulfill_task.cancel()
     try:
-        await task
-    except asyncio.CancelledError:
+        await asyncio.gather(cancel_task, fulfill_task, return_exceptions=True)
+    except Exception:
         pass
 
 app = FastAPI(

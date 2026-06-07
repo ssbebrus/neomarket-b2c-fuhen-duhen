@@ -422,4 +422,56 @@ class OrdersService:
             except Exception as e:
                 logger.error(f"Error in background worker loop: {e}")
 
+    @classmethod
+    async def process_fulfill_pending(cls, db: AsyncSession) -> None:
+        import logging
+        logger = logging.getLogger("orders_worker")
+        
+        stmt = (
+            select(Order)
+            .where(Order.status == "DELIVERED", Order.b2b_fulfilled == False)
+            .options(selectinload(Order.items))
+        )
+        res = await db.execute(stmt)
+        orders = res.scalars().all()
+        
+        for order in orders:
+            b2b_items = [{"sku_id": str(item.sku_id), "quantity": item.quantity} for item in order.items]
+            try:
+                async with await CatalogService.get_b2b_client() as client:
+                    resp = await client.post(
+                        "/api/v1/inventory/fulfill",
+                        json={
+                            "order_id": str(order.id),
+                            "items": b2b_items
+                        }
+                    )
+                    resp.raise_for_status()
+                
+                order.b2b_fulfilled = True
+                await db.commit()
+                logger.info(f"Successfully fulfilled order {order.id} via background worker.")
+            except Exception as e:
+                logger.warning(f"Background retry fulfill failed for order {order.id}: {e}")
+
+    @classmethod
+    async def run_fulfill_worker(cls) -> None:
+        import asyncio
+        import logging
+        from src.db.database import AsyncSessionLocal
+        
+        logger = logging.getLogger("orders_worker")
+        logger.info("Starting background fulfill pending worker...")
+        
+        while True:
+            try:
+                await asyncio.sleep(cls.worker_check_interval)
+                async with AsyncSessionLocal() as db:
+                    await cls.process_fulfill_pending(db)
+            except asyncio.CancelledError:
+                logger.info("Background worker cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Error in background worker loop: {e}")
+
 
