@@ -10,7 +10,9 @@ from src.core.exceptions import (
     OrderEmptyCartException,
     OrderIdempotencyConflict,
     OrderSnapshotMismatch,
-    OrderReserveFailed
+    OrderReserveFailed,
+    OrderNotFound,
+    OrderCancelNotAllowed
 )
 from src.modules.orders.service import OrdersService
 from src.modules.orders.schemas import (
@@ -19,7 +21,8 @@ from src.modules.orders.schemas import (
     PaginatedOrders,
     AddressResponse,
     PaymentMethodResponse,
-    StatusHistoryItem
+    StatusHistoryItem,
+    OrderCancelRequest
 )
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -158,3 +161,34 @@ async def get_order(
             detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"}
         )
     return map_order_to_response(order)
+
+
+@router.post(
+    "/{order_id}/cancel",
+    response_model=OrderResponse,
+    summary="Отменить заказ"
+)
+async def cancel_order(
+    order_id: uuid.UUID,
+    body: Optional[OrderCancelRequest] = None,
+    buyer_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    reason = body.reason if body else None
+    try:
+        order = await OrdersService.cancel_order(db, order_id, buyer_id, reason)
+        return map_order_to_response(order)
+    except OrderNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"}
+        )
+    except OrderCancelNotAllowed as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CANCEL_NOT_ALLOWED",
+                "message": f"Отмена невозможна: заказ в статусе {e.current_status}",
+                "current_status": e.current_status
+            }
+        )

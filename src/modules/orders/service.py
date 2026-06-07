@@ -13,7 +13,9 @@ from src.core.exceptions import (
     OrderEmptyCartException,
     OrderIdempotencyConflict,
     OrderSnapshotMismatch,
-    OrderReserveFailed
+    OrderReserveFailed,
+    OrderNotFound,
+    OrderCancelNotAllowed
 )
 from src.modules.catalog.service import CatalogService
 from src.modules.cart.service import CartService
@@ -293,3 +295,131 @@ class OrdersService:
         stmt_refresh = select(Order).where(Order.id == order.id).options(selectinload(Order.items))
         res_refresh = await db.execute(stmt_refresh)
         return res_refresh.scalar_one()
+
+    @classmethod
+    async def cancel_order(
+        cls,
+        db: AsyncSession,
+        order_id: uuid.UUID,
+        buyer_id: uuid.UUID,
+        reason: Optional[str] = None
+    ) -> Order:
+        # 1. Fetch order (ownership check is built-in)
+        stmt = select(Order).where(Order.id == order_id, Order.buyer_id == buyer_id).options(selectinload(Order.items))
+        res = await db.execute(stmt)
+        order = res.scalars().first()
+        if not order:
+            raise OrderNotFound()
+
+        # 2. Status verification
+        if order.status not in ("CREATED", "PAID"):
+            raise OrderCancelNotAllowed(current_status=order.status)
+
+        # 3. Call B2B unreserve
+        b2b_items = [{"sku_id": str(item.sku_id), "quantity": item.quantity} for item in order.items]
+        unreserve_success = False
+
+        async with await CatalogService.get_b2b_client() as client:
+            try:
+                resp = await client.post(
+                    "/api/v1/unreserve",
+                    json={
+                        "order_id": str(order.id),
+                        "items": b2b_items
+                    }
+                )
+                resp.raise_for_status()
+                unreserve_success = True
+            except Exception as e:
+                import logging
+                logging.getLogger("orders").error(f"Failed to unreserve items in B2B for order {order.id}: {e}")
+
+        # 4. Status transition
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if unreserve_success:
+            order.status = "CANCELLED"
+        else:
+            order.status = "CANCEL_PENDING"
+
+        order.cancel_reason = reason
+        order.updated_at = now
+
+        # Add to history
+        history_list = order.status_history.get("history", []) if order.status_history else []
+        history_list.append({
+            "status": order.status,
+            "changed_at": now.isoformat() + "Z",
+            "reason": f"Отмена заказа: {reason}" if reason else "Отмена заказа"
+        })
+        order.status_history = {"history": history_list}
+
+        await db.commit()
+
+        # Refresh and return
+        stmt_refresh = select(Order).where(Order.id == order.id).options(selectinload(Order.items))
+        res_refresh = await db.execute(stmt_refresh)
+        return res_refresh.scalar_one()
+
+    worker_check_interval: float = 10.0
+
+    @classmethod
+    async def process_cancel_pending(cls, db: AsyncSession) -> None:
+        import logging
+        logger = logging.getLogger("orders_worker")
+        
+        # Find all cancel pending orders
+        stmt = select(Order).where(Order.status == "CANCEL_PENDING").options(selectinload(Order.items))
+        res = await db.execute(stmt)
+        orders = res.scalars().all()
+        
+        for order in orders:
+            b2b_items = [{"sku_id": str(item.sku_id), "quantity": item.quantity} for item in order.items]
+            try:
+                async with await CatalogService.get_b2b_client() as client:
+                    resp = await client.post(
+                        "/api/v1/unreserve",
+                        json={
+                            "order_id": str(order.id),
+                            "items": b2b_items
+                        }
+                    )
+                    resp.raise_for_status()
+                
+                # Success! Transition to CANCELLED
+                order.status = "CANCELLED"
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                order.updated_at = now
+                
+                history_list = order.status_history.get("history", []) if order.status_history else []
+                history_list.append({
+                    "status": "CANCELLED",
+                    "changed_at": now.isoformat() + "Z",
+                    "reason": "Автоматическая отмена фоновым воркером"
+                })
+                order.status_history = {"history": history_list}
+                await db.commit()
+                logger.info(f"Successfully cancelled order {order.id} via background worker.")
+            except Exception as e:
+                logger.warning(f"Background retry unreserve failed for order {order.id}: {e}")
+
+    @classmethod
+    async def run_cancel_pending_worker(cls) -> None:
+        import asyncio
+        import logging
+        from src.db.database import AsyncSessionLocal
+        
+        logger = logging.getLogger("orders_worker")
+        logger.info("Starting background cancel pending worker...")
+        
+        while True:
+            try:
+                await asyncio.sleep(cls.worker_check_interval)
+                async with AsyncSessionLocal() as db:
+                    await cls.process_cancel_pending(db)
+            except asyncio.CancelledError:
+                logger.info("Background worker cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Error in background worker loop: {e}")
+
+

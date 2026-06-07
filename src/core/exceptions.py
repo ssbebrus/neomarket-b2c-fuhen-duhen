@@ -82,6 +82,15 @@ class OrderReserveFailed(OrderException):
         self.failed_items = failed_items
 
 
+class OrderNotFound(OrderException):
+    pass
+
+
+class OrderCancelNotAllowed(OrderException):
+    def __init__(self, current_status: str):
+        self.current_status = current_status
+
+
 
 
 

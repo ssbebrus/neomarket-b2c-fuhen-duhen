@@ -1,12 +1,26 @@
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from src.config import settings
 from src.api.router import api_router
+from src.modules.orders.service import OrdersService
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(OrdersService.run_cancel_pending_worker())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan
 )
 
 @app.exception_handler(HTTPException)
