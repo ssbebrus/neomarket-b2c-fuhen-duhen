@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import UUID, DateTime, Integer, String, ForeignKey, func, Index, JSON
+from sqlalchemy import UUID, DateTime, Integer, String, ForeignKey, func, Index, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.db.base import Base
 
@@ -27,6 +27,7 @@ class Order(Base):
     comment: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     cancel_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status_history: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    b2b_fulfilled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
