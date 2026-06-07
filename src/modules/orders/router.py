@@ -155,6 +155,6 @@ async def get_order(
     if not order:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Заказ не найден"}
+            detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"}
         )
     return map_order_to_response(order)

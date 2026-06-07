@@ -403,3 +403,145 @@ async def test_b2b_unavailable_returns_503(client: AsyncClient, test_db):
         assert response.status_code == 503
         data = response.json()
         assert data["code"] == "B2B_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_orders_list_returns_own_orders_paginated(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order1 = Order(
+        id=uuid.uuid4(),
+        number="NM-2026-000001",
+        buyer_id=USER_ID,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=10000,
+        delivery_cost=0,
+        total=10000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    order2 = Order(
+        id=uuid.uuid4(),
+        number="NM-2026-000002",
+        buyer_id=USER_ID,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=20000,
+        delivery_cost=0,
+        total=20000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    other_user = uuid.uuid4()
+    order_other = Order(
+        id=uuid.uuid4(),
+        number="NM-2026-000003",
+        buyer_id=other_user,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=30000,
+        delivery_cost=0,
+        total=30000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    test_db.add_all([order1, order2, order_other])
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    response = await client.get(
+        "/api/v1/orders?limit=1&offset=0",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_count"] == 2
+    assert len(data["items"]) == 1
+    returned_order = data["items"][0]
+    assert returned_order["buyer_id"] == str(USER_ID)
+    assert returned_order["id"] in [str(order1.id), str(order2.id)]
+
+
+@pytest.mark.asyncio
+async def test_order_detail_shows_fixed_prices(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000004",
+        buyer_id=USER_ID,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=90000,
+        delivery_cost=0,
+        total=90000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    item = OrderItem(
+        order_id=order_id,
+        sku_id=SKU_ID_A,
+        product_id=PRODUCT_ID_A,
+        name="iPhone 15 Pro Max 256GB Black",
+        sku_code="SKU-IPHONE-15",
+        quantity=1,
+        unit_price=90000,
+        line_total=90000
+    )
+    test_db.add(order)
+    test_db.add(item)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    response = await client.get(
+        f"/api/v1/orders/{order_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(order_id)
+    assert len(data["items"]) == 1
+    assert data["items"][0]["unit_price"] == 90000
+
+
+@pytest.mark.asyncio
+async def test_other_user_order_returns_404_not_403(client: AsyncClient, test_db):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    other_user_id = uuid.uuid4()
+    order_id = uuid.uuid4()
+    order = Order(
+        id=order_id,
+        number="NM-2026-000005",
+        buyer_id=other_user_id,
+        status="PAID",
+        idempotency_key=uuid.uuid4(),
+        idempotency_request_body="{}",
+        subtotal=5000,
+        delivery_cost=0,
+        total=5000,
+        address_id=ADDRESS_ID,
+        payment_method_id=PAYMENT_METHOD_ID,
+        created_at=now
+    )
+    test_db.add(order)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+    response = await client.get(
+        f"/api/v1/orders/{order_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "ORDER_NOT_FOUND"
