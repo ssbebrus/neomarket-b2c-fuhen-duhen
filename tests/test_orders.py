@@ -606,6 +606,15 @@ async def test_cancel_paid_order_transitions_to_cancelled(client: AsyncClient, t
         assert data["status"] == "CANCELLED"
         assert data["cancel_reason"] == "Клиент передумал"
 
+        # Check mock call path
+        mock_client.post.assert_called_once_with(
+            "/api/v1/inventory/unreserve",
+            json={
+                "order_id": str(order_id),
+                "items": [{"sku_id": str(SKU_ID_A), "quantity": 2}]
+            }
+        )
+
         # Check DB
         stmt = select(Order).where(Order.id == order_id)
         res = await test_db.execute(stmt)
@@ -654,10 +663,10 @@ async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClie
         mock_client = AsyncMock()
         mock_get_client.return_value = mock_client
         mock_client.__aenter__.return_value = mock_client
-
+ 
         # Mock B2B unreserve throws exception (B2B down)
         mock_client.post.side_effect = Exception("Connection Timeout")
-
+ 
         response = await client.post(
             f"/api/v1/orders/{order_id}/cancel",
             headers={"Authorization": f"Bearer {token}"}
@@ -666,13 +675,22 @@ async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClie
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "CANCEL_PENDING"
+ 
+        # Check mock call path
+        mock_client.post.assert_called_once_with(
+            "/api/v1/inventory/unreserve",
+            json={
+                "order_id": str(order_id),
+                "items": [{"sku_id": str(SKU_ID_A), "quantity": 2}]
+            }
+        )
 
         # Check DB
         stmt = select(Order).where(Order.id == order_id)
         res = await test_db.execute(stmt)
         db_order = res.scalars().first()
         assert db_order.status == "CANCEL_PENDING"
-
+ 
     # Now verify the background worker picks it up and retries successfully
     with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client_worker:
         mock_client_worker = AsyncMock()
@@ -684,9 +702,18 @@ async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClie
         mock_unreserve_resp.json = lambda: {"unreserved": True}
         mock_unreserve_resp.raise_for_status.return_value = None
         mock_client_worker.post.return_value = mock_unreserve_resp
-
+ 
         # Call process_cancel_pending directly using the test_db session
         await OrdersService.process_cancel_pending(test_db)
+ 
+        # Check mock call path in worker
+        mock_client_worker.post.assert_called_once_with(
+            "/api/v1/inventory/unreserve",
+            json={
+                "order_id": str(order_id),
+                "items": [{"sku_id": str(SKU_ID_A), "quantity": 2}]
+            }
+        )
 
         # Check DB: order status must be CANCELLED now
         stmt = select(Order).where(Order.id == order_id)
