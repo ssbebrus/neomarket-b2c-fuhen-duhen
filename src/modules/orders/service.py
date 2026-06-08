@@ -322,7 +322,7 @@ class OrdersService:
         async with await CatalogService.get_b2b_client() as client:
             try:
                 resp = await client.post(
-                    "/api/v1/unreserve",
+                    "/api/v1/inventory/unreserve",
                     json={
                         "order_id": str(order.id),
                         "items": b2b_items
@@ -377,7 +377,7 @@ class OrdersService:
             try:
                 async with await CatalogService.get_b2b_client() as client:
                     resp = await client.post(
-                        "/api/v1/unreserve",
+                        "/api/v1/inventory/unreserve",
                         json={
                             "order_id": str(order.id),
                             "items": b2b_items
