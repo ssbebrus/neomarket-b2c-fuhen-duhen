@@ -403,9 +403,9 @@ async def test_guest_cart_merged_on_login(client: AsyncClient, test_db):
 
 
 @pytest.mark.asyncio
-async def test_get_cart_with_missing_sku_returns_404(client: AsyncClient, test_db):
+async def test_get_cart_with_missing_sku_returns_200_unavailable(client: AsyncClient, test_db):
     """
-    unhappy: test_get_cart_with_missing_sku_returns_404
+    unhappy: test_get_cart_with_missing_sku_returns_200_unavailable
     """
     item_deleted = CartItem(user_id=USER_ID, sku_id=SKU_ID_A, quantity=3, unit_price_at_add=90000)
     test_db.add(item_deleted)
@@ -429,7 +429,65 @@ async def test_get_cart_with_missing_sku_returns_404(client: AsyncClient, test_d
             "/api/v1/cart",
             headers={"Authorization": f"Bearer {token}"}
         )
-        assert response.status_code == 404
+        assert response.status_code == 200
         data = response.json()
-        assert data["code"] == "NOT_FOUND"
+        assert data["is_valid"] is False
+        assert data["items_count"] == 3
+        assert data["subtotal"] == 0
+        assert len(data["items"]) == 1
+        item = data["items"][0]
+        assert item["sku_id"] == str(SKU_ID_A)
+        assert item["is_available"] is False
+        assert item["unavailable_reason"] == "PRODUCT_DELETED"
+        assert item["name"] == "Товар недоступен"
+
+
+@pytest.mark.asyncio
+async def test_get_cart_with_sku_missing_product_id_returns_200_unavailable(client: AsyncClient, test_db):
+    """
+    unhappy: test_get_cart_with_sku_missing_product_id_returns_200_unavailable
+    """
+    item_no_product = CartItem(user_id=USER_ID, sku_id=SKU_ID_A, quantity=3, unit_price_at_add=90000)
+    test_db.add(item_no_product)
+    await test_db.commit()
+
+    token = generate_token(USER_ID)
+
+    with patch("src.modules.catalog.service.CatalogService.get_b2b_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_get_client.return_value = mock_client
+        mock_client.__aenter__.return_value = mock_client
+
+        # Mock GET SKU to return a dict WITHOUT product_id
+        mock_sku_response = {
+            "id": str(SKU_ID_A),
+            "name": "Red / XL",
+            "price": 100000,
+            "discount": 10000,
+            "active_quantity": 50,
+            "article": "SKU-RED-XL",
+            "images": []
+        }
+        mock_resp = AsyncMock(spec=Response)
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_sku_response
+        mock_resp.raise_for_status.return_value = None
+        mock_client.get.return_value = mock_resp
+
+        response = await client.get(
+            "/api/v1/cart",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_valid"] is False
+        assert data["items_count"] == 3
+        assert data["subtotal"] == 0
+        assert len(data["items"]) == 1
+        item = data["items"][0]
+        assert item["sku_id"] == str(SKU_ID_A)
+        assert item["is_available"] is False
+        assert item["unavailable_reason"] == "PRODUCT_DELETED"
+        assert item["name"] == "Товар недоступен"
+
 

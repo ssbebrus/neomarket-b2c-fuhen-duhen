@@ -120,52 +120,77 @@ class CartService:
             sku = sku_map.get(item.sku_id)
             total_items_count += item.quantity
 
-            if not sku:
-                raise SKUNotFound()
+            # Default values for unavailable item
+            sku_title = "Товар недоступен"
+            sku_code = ""
+            current_unit_price = 0
+            active_stock = 0
+            product_id_str = None
+            product = None
+            is_available = False
+            calculated_reason = None
 
-            product_id_str = sku.get("product_id")
-            product = product_map.get(product_id_str) if product_id_str else None
+            if sku and sku.get("product_id"):
+                product_id_str = sku.get("product_id")
+                product = product_map.get(product_id_str)
 
-            # Determine product info and availability status
-            product_title = "Unknown Product"
-            is_product_active = False
-            is_blocked = False
-            is_deleted = False
-            is_on_moderation = False
+                # Determine product info and availability status
+                product_title = "Unknown Product"
+                is_product_active = False
+                is_blocked = False
+                is_deleted = False
+                is_on_moderation = False
 
-            if product:
-                product_title = product.get("title", "Unknown Product")
-                deleted_flag = product.get("deleted", False)
-                status = product.get("status", "CREATED")
+                if product:
+                    product_title = product.get("title", "Unknown Product")
+                    deleted_flag = product.get("deleted", False)
+                    status = product.get("status", "CREATED")
 
-                if deleted_flag:
+                    if deleted_flag:
+                        is_deleted = True
+                    elif status in ("BLOCKED", "HARD_BLOCKED"):
+                        is_blocked = True
+                    elif status in ("ON_MODERATION", "CREATED"):
+                        is_on_moderation = True
+                    elif status == "MODERATED":
+                        is_product_active = True
+                else:
                     is_deleted = True
-                elif status in ("BLOCKED", "HARD_BLOCKED"):
-                    is_blocked = True
-                elif status in ("ON_MODERATION", "CREATED"):
-                    is_on_moderation = True
-                elif status == "MODERATED":
-                    is_product_active = True
+
+                sku_name = sku.get("name") or ""
+                sku_title = f"{product_title} {sku_name}".strip()
+                sku_code = sku.get("article") or ""
+                
+                # Pricing
+                price = sku.get("price", 0)
+                discount = sku.get("discount", 0)
+                current_unit_price = max(0, price - discount)
+
+                active_stock = sku.get("active_quantity", 0)
+
+                # Determine if SKU is available
+                is_available = True
+                if is_deleted:
+                    is_available = False
+                    calculated_reason = "PRODUCT_DELETED"
+                elif is_blocked:
+                    is_available = False
+                    calculated_reason = "PRODUCT_BLOCKED"
+                elif is_on_moderation:
+                    is_available = False
+                    calculated_reason = "ON_MODERATION"
+                elif active_stock <= 0:
+                    is_available = False
+                    calculated_reason = "OUT_OF_STOCK"
             else:
                 is_deleted = True
-
-            sku_name = sku.get("name") or ""
-            sku_title = f"{product_title} {sku_name}".strip()
-            sku_code = sku.get("article") or ""
-            
-            # Pricing
-            price = sku.get("price", 0)
-            discount = sku.get("discount", 0)
-            current_unit_price = max(0, price - discount)
-
-            active_stock = sku.get("active_quantity", 0)
-
-            # Determine if SKU is available
-            is_available = True
-            if is_deleted or is_blocked or is_on_moderation or item.unavailable_reason:
+                calculated_reason = "PRODUCT_DELETED"
                 is_available = False
-            elif active_stock <= 0:
+
+            # Override/supplement with database-level reason if present
+            if item.unavailable_reason:
                 is_available = False
+                calculated_reason = item.unavailable_reason
 
             # Check if this item is valid (available and enough stock)
             item_is_valid = is_available and (item.quantity <= active_stock)
@@ -179,27 +204,28 @@ class CartService:
 
             # Format image
             image_ref = None
-            sku_images = sku.get("images", [])
-            product_images = product.get("images", []) if product else []
+            if sku:
+                sku_images = sku.get("images", [])
+                product_images = product.get("images", []) if product else []
 
-            img_data = None
-            if sku_images:
-                # Find ordering = 0 or first image
-                sku_images_sorted = sorted(sku_images, key=lambda img: img.get("ordering", 999))
-                img_data = sku_images_sorted[0]
-            elif product_images:
-                # Find ordering = 0 or first image
-                product_images_sorted = sorted(product_images, key=lambda img: img.get("ordering", 999))
-                img_data = product_images_sorted[0]
+                img_data = None
+                if sku_images:
+                    # Find ordering = 0 or first image
+                    sku_images_sorted = sorted(sku_images, key=lambda img: img.get("ordering", 999))
+                    img_data = sku_images_sorted[0]
+                elif product_images:
+                    # Find ordering = 0 or first image
+                    product_images_sorted = sorted(product_images, key=lambda img: img.get("ordering", 999))
+                    img_data = product_images_sorted[0]
 
-            if img_data:
-                image_ref = ImageRef(
-                    id=img_data.get("id") or uuid.uuid4(),
-                    url=img_data.get("url", ""),
-                    alt=img_data.get("alt", ""),
-                    ordering=img_data.get("ordering", 0),
-                    is_main=img_data.get("ordering", 0) == 0
-                )
+                if img_data:
+                    image_ref = ImageRef(
+                        id=img_data.get("id") or uuid.uuid4(),
+                        url=img_data.get("url", ""),
+                        alt=img_data.get("alt", ""),
+                        ordering=img_data.get("ordering", 0),
+                        is_main=img_data.get("ordering", 0) == 0
+                    )
 
             enriched_items.append(
                 CartItemSchema(
@@ -213,7 +239,7 @@ class CartService:
                     line_total=line_total,
                     available_quantity=active_stock,
                     is_available=is_available,
-                    unavailable_reason=item.unavailable_reason,
+                    unavailable_reason=calculated_reason,
                     image=image_ref
                 )
             )
